@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8faf7;
+  --foreground: #101828;
+  --ims-primary: #3f8f00;
+  --ims-primary-dark: #1f7a00;
+  --ims-primary-light: #eef8e8;
+  --ims-border: #dfe8d8;
+  --ims-muted: #667085;
 }
 
 @theme inline {
@@ -12,15 +17,62 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
 }
 
-body {
-  background: var(--background);
+.app-background {
+  position: relative;
+  min-height: 100vh;
+  isolation: isolate;
+  background-color: #f8faf7;
+}
+
+.app-surface {
+  background-color: #ffffff;
+  border: 1px solid var(--ims-border);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05);
+}
+
+.app-input-field {
+  height: 2.875rem;
+  border-radius: 12px;
+  border: 1px solid var(--ims-border);
+  background-color: #fff;
+  padding-left: 0.875rem;
+  padding-right: 0.875rem;
+  font-size: 0.875rem;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+.app-input-field:focus {
+  outline: none;
+  border-color: var(--ims-primary);
+  box-shadow: 0 0 0 3px rgba(63, 143, 0, 0.12);
+}
+
+.invoice-paper {
+  background: #fcfdfb;
+  border: 1px solid var(--ims-border);
+  border-radius: 18px;
+}
+
+.german-address-autocomplete-wrapper {
+  width: 100%;
+}
+
+.german-address-autocomplete-wrapper gmp-place-autocomplete,
+.german-address-autocomplete-host {
+  display: block;
+  width: 100%;
+  color-scheme: light;
+}
+
+.german-address-autocomplete-wrapper gmp-place-autocomplete {
+  border-radius: 12px;
+  border: 1px solid var(--ims-border);
+  background-color: #fff;
+  min-height: 2.875rem;
 }
