@@ -1,6 +1,8 @@
 "use client";
 
-import { Button, CircularProgress, type ButtonProps } from "@mui/material";
+import Link from "next/link";
+import { Box, Button, CircularProgress, type ButtonProps } from "@mui/material";
+import { designTokens } from "@/theme/designTokens";
 import { imsColors } from "@/theme/imsTheme";
 
 export type ImsButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -19,18 +21,31 @@ function variantSx(imsVariant: ImsButtonVariant) {
     case "primary":
       return {
         ...base,
-        boxShadow: "0 1px 2px rgba(63, 143, 0, 0.18)",
+        boxShadow: designTokens.shadow.primaryButton,
+        transition: `transform ${designTokens.transition.fast}, box-shadow ${designTokens.transition.fast}`,
+        "&:hover:not(:disabled)": {
+          transform: "translateY(-1px)",
+          boxShadow: designTokens.shadow.primaryButton,
+        },
+        "&:active:not(:disabled)": {
+          transform: "translateY(0)",
+        },
       };
     case "secondary":
       return {
         ...base,
-        borderColor: imsColors.border,
+        borderColor: designTokens.border.default,
         color: imsColors.textDark,
-        bgcolor: "#fff",
-        boxShadow: "none",
+        bgcolor: designTokens.surface.card,
+        boxShadow: designTokens.shadow.soft,
+        backdropFilter: designTokens.blur.surface,
         "&:hover": {
           borderColor: imsColors.primary,
           bgcolor: imsColors.primaryLight,
+          transform: "translateY(-1px)",
+        },
+        "&:active": {
+          transform: "translateY(0)",
         },
       };
     case "ghost":
@@ -83,19 +98,48 @@ export function ImsButton({
   children,
   sx,
   startIcon,
+  href,
+  component,
   ...props
 }: ImsButtonProps) {
   const muiVariant = variantProps(imsVariant);
+  const isInternalLink =
+    typeof href === "string" && href.startsWith("/") && !href.startsWith("//");
+  const linkProps = component
+    ? { component, href }
+    : isInternalLink && href
+      ? { component: Link, href }
+      : href
+        ? { href }
+        : {};
 
   return (
-    <Button
-      {...props}
-      {...muiVariant}
-      disabled={disabled || loading}
-      startIcon={loading ? <CircularProgress size={16} color="inherit" /> : startIcon}
-      sx={[variantSx(imsVariant), ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
-    >
-      {children}
-    </Button>
+    <Box sx={{ position: "relative", display: "inline-flex", verticalAlign: "middle" }}>
+      <Button
+        {...props}
+        {...muiVariant}
+        {...linkProps}
+        disabled={disabled || loading}
+        startIcon={startIcon}
+        sx={[
+          variantSx(imsVariant),
+          loading ? { opacity: 0.45 } : null,
+          ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+        ]}
+      >
+        {children}
+      </Button>
+      {loading ? (
+        <CircularProgress
+          size={18}
+          sx={{
+            position: "absolute",
+            inset: 0,
+            m: "auto",
+            color: imsVariant === "primary" ? imsColors.primaryDark : imsColors.primary,
+          }}
+        />
+      ) : null}
+    </Box>
   );
 }

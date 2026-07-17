@@ -115,7 +115,7 @@ export function SettingsForm({
 
   return (
     <PageShell
-      breadcrumbs={[{ label: tNav("settings") }]}
+      breadcrumbs={[{ label: tNav("profile") }]}
       title={t("title")}
       subtitle={t("subtitle")}
     >

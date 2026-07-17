@@ -19,15 +19,67 @@ export type CustomerAddressScope = "DE" | "WORLD";
 
 export type SupportedCurrency = "EUR" | "USD" | "GBP" | "CHF";
 
+export type N8nWebhookMode = "test" | "production";
+
+export type TechnicalErrorsDisplay = "admin_only" | "never" | "development";
+
 export interface ProfileInvoiceSettings {
   google_template_doc_id?: string;
   google_docs_folder_id?: string;
   pdf_folder_id?: string;
+  dropbox_archive_folder_id?: string;
   default_payment_days?: number;
   default_invoice_title?: string;
+  default_invoice_language?: "en" | "de";
   invoice_number_year_reset?: boolean;
   default_bank_account_id?: string;
   last_numbering_reset_at?: string;
+  n8n_webhook_url?: string;
+  n8n_webhook_mode?: N8nWebhookMode;
+  retry_failed_generation?: boolean;
+  technical_errors_display?: TechnicalErrorsDisplay;
+  export_pdf?: boolean;
+  export_docx?: boolean;
+  spam_protection_enabled?: boolean;
+  rate_limit_per_user?: number;
+  duplicate_submit_block_seconds?: number;
+  max_retry_attempts?: number;
+  generation_timeout_seconds?: number;
+  max_generations_per_hour?: number;
+  invoice_page_size?: number;
+  notify_on_generation_failed?: boolean;
+  notify_on_generation_success?: boolean;
+  notification_language?: "en" | "de";
+  app_settings_updated_at?: string;
+  app_settings_updated_by?: string;
+  service_health_checked_at?: string;
+  service_health_snapshot?: {
+    services?: Array<{
+      key?: string;
+      state?: string;
+      messageKey?: string;
+      message?: string | null;
+    }>;
+    lastSuccessfulGeneration?: { timestamp?: string | null; invoiceNumber?: string | null };
+    lastFailedGeneration?: { timestamp?: string | null; invoiceNumber?: string | null };
+  };
+  service_health_log?: Array<{
+    id?: string;
+    checkedAt?: string;
+    checked_at?: string;
+    overallStatus?: string;
+    overall_status?: string;
+    services?: Array<{
+      key?: string;
+      state?: string;
+      messageKey?: string;
+      message?: string | null;
+    }>;
+    requestFailed?: boolean;
+    request_failed?: boolean;
+    failureMessageKey?: string;
+    failure_message_key?: string;
+  }>;
 }
 
 export interface Profile {
@@ -112,6 +164,8 @@ export interface Invoice {
   google_doc_url: string | null;
   pdf_file_id: string | null;
   pdf_url: string | null;
+  dropbox_pdf_url: string | null;
+  dropbox_docx_url: string | null;
   generated_at: string | null;
   created_at: string;
   updated_at: string;

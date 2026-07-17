@@ -31,9 +31,10 @@ import { UserProfileMenu } from "@/components/layout/UserProfileMenu";
 import { useSidebarLayout } from "@/components/layout/SidebarContext";
 import { SIDEBAR_GUTTER } from "@/components/layout/sidebarLayout";
 import { createClient } from "@/lib/supabase/client";
+import { designTokens, imsSidebarSurfaceSx } from "@/theme/designTokens";
 import { imsColors } from "@/theme/imsTheme";
 
-type NavKey = "dashboard" | "invoices" | "customers" | "templates" | "bankAccounts" | "settings";
+type NavKey = "dashboard" | "invoices" | "customers" | "templates" | "bankAccounts" | "profile";
 
 const navItems: { href: string; key: NavKey; icon: typeof DashboardOutlinedIcon }[] = [
   { href: "/dashboard", key: "dashboard", icon: DashboardOutlinedIcon },
@@ -41,14 +42,18 @@ const navItems: { href: string; key: NavKey; icon: typeof DashboardOutlinedIcon 
   { href: "/customers", key: "customers", icon: PeopleOutlineOutlinedIcon },
   { href: "/settings#vorlagen", key: "templates", icon: DescriptionOutlinedIcon },
   { href: "/settings#bankkonten", key: "bankAccounts", icon: AccountBalanceOutlinedIcon },
-  { href: "/settings", key: "settings", icon: SettingsOutlinedIcon },
+  { href: "/settings", key: "profile", icon: SettingsOutlinedIcon },
 ];
 
 function isNavItemActive(pathname: string, hash: string, item: (typeof navItems)[number]): boolean {
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) {
+  if (pathname === "/settings/app" || pathname.startsWith("/settings/app/")) {
+    return false;
+  }
+
+  if (pathname === "/settings" || pathname === "/settings/") {
     if (item.key === "templates") return hash === "#vorlagen";
     if (item.key === "bankAccounts") return hash === "#bankkonten";
-    if (item.key === "settings") return !hash;
+    if (item.key === "profile") return !hash;
     return false;
   }
 
@@ -276,8 +281,9 @@ export function AppSidebar() {
           left: 0,
           right: 0,
           zIndex: 1200,
-          bgcolor: "#fff",
-          borderBottom: `1px solid ${imsColors.border}`,
+          bgcolor: designTokens.surface.sidebar,
+          borderBottom: `1px solid ${designTokens.border.default}`,
+          backdropFilter: designTokens.blur.surface,
           px: 2,
           py: 1.25,
         }}
@@ -300,7 +306,8 @@ export function AppSidebar() {
           "& .MuiDrawer-paper": {
             width: 260,
             border: "none",
-            bgcolor: "#fff",
+            bgcolor: designTokens.surface.sidebar,
+            backdropFilter: designTokens.blur.surface,
           },
         }}
       >
@@ -323,11 +330,9 @@ export function AppSidebar() {
         <Card
           sx={{
             height: "100%",
-            borderRadius: "22px",
-            border: `1px solid ${imsColors.border}`,
-            boxShadow: "0 1px 3px rgba(16, 24, 40, 0.05)",
             overflow: "hidden",
             position: "relative",
+            ...imsSidebarSurfaceSx,
           }}
         >
           <IconButton
@@ -341,8 +346,8 @@ export function AppSidebar() {
               zIndex: 2,
               width: 28,
               height: 28,
-              bgcolor: "#fff",
-              border: `1px solid ${imsColors.border}`,
+              bgcolor: designTokens.surface.card,
+              border: `1px solid ${designTokens.border.default}`,
               color: imsColors.textMuted,
               "&:hover": { bgcolor: imsColors.primaryLight, color: imsColors.primaryDark },
             }}

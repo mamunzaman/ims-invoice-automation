@@ -1,0 +1,32 @@
+/**
+ * Expected body for the n8n "Respond to Webhook" node (final workflow response).
+ * Use in a Set or Code node before Respond to Webhook.
+ */
+{
+  "success": true,
+  "workflow_status": "completed",
+  "invoice_number": "2026-0001",
+  "google_doc_id": "GOOGLE_DOC_FILE_ID",
+  "google_doc_url": "https://docs.google.com/document/d/GOOGLE_DOC_FILE_ID/edit",
+  "pdf_file_id": "GOOGLE_DRIVE_PDF_FILE_ID",
+  "pdf_url": "https://drive.google.com/file/d/GOOGLE_DRIVE_PDF_FILE_ID/view",
+  "docx_file_id": "GOOGLE_DRIVE_DOCX_FILE_ID",
+  "docx_url": "https://drive.google.com/file/d/GOOGLE_DRIVE_DOCX_FILE_ID/view",
+  "dropbox_pdf_url": "https://www.dropbox.com/s/.../invoice.pdf",
+  "dropbox_docx_url": "https://www.dropbox.com/s/.../invoice.docx",
+  "steps": [
+    { "key": "received", "label": "Invoice data received", "status": "completed" },
+    { "key": "validated", "label": "Data validated", "status": "completed" },
+    { "key": "copy_template", "label": "Google Docs template copied", "status": "completed" },
+    { "key": "replace_placeholders", "label": "Placeholders replaced", "status": "completed" },
+    { "key": "google_doc_created", "label": "Google Docs invoice created", "status": "completed", "url": "https://docs.google.com/document/d/GOOGLE_DOC_FILE_ID/edit" },
+    { "key": "export_pdf", "label": "PDF exported", "status": "completed" },
+    { "key": "export_docx", "label": "DOCX exported", "status": "completed" },
+    { "key": "pdf_drive_upload", "label": "PDF saved to Google Drive", "status": "completed", "url": "https://drive.google.com/file/d/GOOGLE_DRIVE_PDF_FILE_ID/view" },
+    { "key": "docx_drive_upload", "label": "DOCX saved to Google Drive", "status": "completed", "url": "https://drive.google.com/file/d/GOOGLE_DRIVE_DOCX_FILE_ID/view" },
+    { "key": "dropbox_folders", "label": "Dropbox archive folders prepared", "status": "completed" },
+    { "key": "dropbox_pdf", "label": "PDF archived in Dropbox", "status": "completed", "url": "https://www.dropbox.com/s/.../invoice.pdf" },
+    { "key": "dropbox_docx", "label": "DOCX archived in Dropbox", "status": "completed", "url": "https://www.dropbox.com/s/.../invoice.docx" },
+    { "key": "invoice_saved", "label": "Invoice status saved", "status": "completed" }
+  ]
+}

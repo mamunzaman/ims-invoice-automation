@@ -7,6 +7,10 @@ export function isInvoiceArchived(invoice: Invoice): boolean {
   return Boolean(invoiceNotesMeta(invoice).archived);
 }
 
+export function canEditInvoice(invoice: Invoice): boolean {
+  return invoice.status === "draft";
+}
+
 export function isInvoiceGenerated(invoice: Invoice): boolean {
   if (invoice.status !== "draft") return true;
   if (invoice.generated_at) return true;
@@ -34,9 +38,19 @@ export function canCancelInvoice(invoice: Invoice): boolean {
   return ["draft", "generated", "sent", "paid"].includes(invoice.status);
 }
 
+export function canRetryDocumentGeneration(invoice: Invoice): boolean {
+  if (isInvoiceArchived(invoice)) return false;
+  if (invoice.status !== "draft") return false;
+  if (invoicePdfUrl(invoice)) return false;
+  const generationStatus = resolveGenerationStatus(invoice);
+  return generationStatus === "FAILED" || invoice.workflow_status === "failed";
+}
+
 export function canRegenerateInvoice(invoice: Invoice): boolean {
   if (isInvoiceArchived(invoice)) return false;
   if (invoice.status === "cancelled") return false;
+  if (canRetryDocumentGeneration(invoice)) return false;
+  if (!invoicePdfUrl(invoice)) return false;
   return invoice.status !== "draft";
 }
 

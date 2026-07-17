@@ -7,6 +7,7 @@ import { Box, Menu, MenuItem, Typography } from "@mui/material";
 import { setUserLocale } from "@/lib/actions/locale";
 import { getLocaleDefinitions } from "@/i18n/locale-config";
 import { LOCALE_COOKIE, LOCALE_STORAGE_KEY, type AppLocale } from "@/i18n/routing";
+import { imsMenuPaperSx } from "@/components/forms/ims/imsStyles";
 import { imsColors } from "@/theme/imsTheme";
 import { useTranslations } from "next-intl";
 
@@ -15,15 +16,13 @@ interface ProfileLanguageMenuProps {
 }
 
 const menuItemSx = {
-  minHeight: 36,
+  minHeight: 40,
   py: 0.75,
   px: 1.5,
   mx: 0.75,
   borderRadius: "8px",
   fontSize: 13,
   color: imsColors.textDark,
-  transition: "background-color 0.12s ease",
-  "&:hover": { bgcolor: "rgba(16, 24, 40, 0.04)" },
 };
 
 export function ProfileLanguageMenu({ onChanged }: ProfileLanguageMenuProps) {
@@ -76,7 +75,6 @@ export function ProfileLanguageMenu({ onChanged }: ProfileLanguageMenuProps) {
               ...menuItemSx,
               pl: 3.25,
               fontWeight: selected ? 600 : 400,
-              bgcolor: selected ? "rgba(16, 24, 40, 0.03)" : "transparent",
             }}
           >
             <Box
@@ -179,11 +177,9 @@ export function LanguageSelector({ onChanged }: LanguageSelectorProps) {
         slotProps={{
           paper: {
             sx: {
-              borderRadius: "12px",
+              ...imsMenuPaperSx,
               minWidth: 180,
               mt: 0.75,
-              border: `1px solid ${imsColors.border}`,
-              boxShadow: "0 8px 24px rgba(16, 24, 40, 0.08)",
             },
           },
         }}

@@ -8,6 +8,7 @@ import {
   Select,
   type SelectChangeEvent,
 } from "@mui/material";
+import { imsSelectMenuProps } from "@/components/forms/ims/imsStyles";
 
 export interface ImsSelectOption {
   value: string;
@@ -53,6 +54,7 @@ export function ImsSelect({
         value={value}
         onChange={handleChange}
         disabled={disabled}
+        MenuProps={imsSelectMenuProps}
       >
         {options.map((option) => (
           <MenuItem key={option.value} value={option.value}>

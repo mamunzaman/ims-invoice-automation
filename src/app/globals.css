@@ -1,13 +1,26 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8faf7;
+  --background: #f6f8f5;
   --foreground: #101828;
   --ims-primary: #3f8f00;
   --ims-primary-dark: #1f7a00;
   --ims-primary-light: #eef8e8;
-  --ims-border: #dfe8d8;
+  --ims-border: rgba(90, 120, 80, 0.14);
   --ims-muted: #667085;
+  --ims-surface-card: rgba(255, 255, 255, 0.86);
+  --ims-surface-soft: #fbfdf9;
+  --ims-shadow-card: 0 14px 40px rgba(25, 40, 15, 0.07);
+  --ims-shadow-soft: 0 8px 30px rgba(25, 40, 15, 0.05);
+  --ims-shadow-primary-button: 0 10px 22px rgba(63, 143, 0, 0.18);
+  --ims-radius-card: 22px;
+  --ims-table-header: #f8fbf6;
+  --ims-table-row: #fefffd;
+  --ims-table-row-hover: #f5faf1;
+  --ims-table-toolbar: #f8fbf6;
+  --ims-global-bg: radial-gradient(circle at top left, rgba(92, 170, 37, 0.08), transparent 35%),
+    radial-gradient(circle at top right, rgba(63, 143, 0, 0.05), transparent 30%),
+    linear-gradient(180deg, #f7f9f5 0%, #f3f6f2 100%);
 }
 
 @theme inline {
@@ -18,6 +31,8 @@
 }
 
 body {
+  background: var(--ims-global-bg);
+  background-attachment: fixed;
   background-color: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
@@ -27,13 +42,35 @@ body {
   position: relative;
   min-height: 100vh;
   isolation: isolate;
-  background-color: #f8faf7;
+  background: var(--ims-global-bg);
+  background-attachment: fixed;
+  background-color: var(--background);
 }
 
 .app-surface {
-  background-color: #ffffff;
+  background-color: var(--ims-surface-card);
   border: 1px solid var(--ims-border);
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05);
+  border-radius: var(--ims-radius-card);
+  box-shadow: var(--ims-shadow-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.app-table-toolbar {
+  background-color: var(--ims-table-toolbar);
+  border-bottom: 1px solid var(--ims-border);
+}
+
+.app-table-head {
+  background-color: var(--ims-table-header);
+}
+
+.app-table-row {
+  background-color: var(--ims-table-row);
+}
+
+.app-table-row:hover {
+  background-color: var(--ims-table-row-hover);
 }
 
 .app-input-field {
@@ -54,7 +91,7 @@ body {
 }
 
 .invoice-paper {
-  background: #fcfdfb;
+  background: var(--ims-surface-soft);
   border: 1px solid var(--ims-border);
   border-radius: 18px;
 }

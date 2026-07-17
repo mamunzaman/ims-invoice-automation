@@ -70,7 +70,12 @@ export function ImsAlert({ tone = "info", title, children }: ImsAlertProps) {
             {title}
           </Typography>
         ) : null}
-        <Typography sx={{ fontSize: 12.5, color: style.color, lineHeight: 1.45 }}>{children}</Typography>
+        <Typography
+          component="div"
+          sx={{ fontSize: 12.5, color: style.color, lineHeight: 1.45 }}
+        >
+          {children}
+        </Typography>
       </Stack>
     </Stack>
   );

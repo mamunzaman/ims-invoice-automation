@@ -3,6 +3,21 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { InvoiceFormData, ProfileInvoiceSettings } from "@/lib/types/database";
+
+function isInvoiceSettingsSchemaError(message: string): boolean {
+  return /invoice_settings/i.test(message);
+}
+
+function normalizeInvoiceSettings(value: unknown): ProfileInvoiceSettings {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as ProfileInvoiceSettings;
+  }
+  return {};
+}
+
+function serializeInvoiceSettings(settings: ProfileInvoiceSettings): ProfileInvoiceSettings {
+  return JSON.parse(JSON.stringify(settings)) as ProfileInvoiceSettings;
+}
 import {
   canDeleteInvoice,
   canArchiveInvoice,
@@ -11,6 +26,7 @@ import {
   type DocumentHealthIssue,
   type DocumentHealthLevel,
   isInvoiceGenerated,
+  canRetryDocumentGeneration,
 } from "@/lib/invoice-lifecycle";
 import {
   invoiceToFormData,
@@ -187,8 +203,12 @@ export async function getInvoiceAdminSettings(): Promise<ProfileInvoiceSettings>
     .eq("id", user.id)
     .single();
 
-  if (error || !data?.invoice_settings) return {};
-  return (data.invoice_settings as ProfileInvoiceSettings) || {};
+  if (error) {
+    if (isInvoiceSettingsSchemaError(error.message)) return {};
+    return {};
+  }
+
+  return normalizeInvoiceSettings(data?.invoice_settings);
 }
 
 export async function updateInvoiceAdminSettings(settings: ProfileInvoiceSettings) {
@@ -198,24 +218,45 @@ export async function updateInvoiceAdminSettings(settings: ProfileInvoiceSetting
   } = await supabase.auth.getUser();
   if (!user) return { success: false as const, errors: ["Nicht angemeldet."] };
 
+  const { data: profileRow, error: readError } = await supabase
+    .from("profiles")
+    .select("invoice_settings")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (readError && isInvoiceSettingsSchemaError(readError.message)) {
+    return {
+      success: false as const,
+      errors: ["APP_SETTINGS_SAVE_FAILED"],
+      technical: [readError.message],
+    };
+  }
+
+  const current = normalizeInvoiceSettings(profileRow?.invoice_settings);
+  const merged = serializeInvoiceSettings({ ...current, ...settings });
+
   const { error } = await supabase
     .from("profiles")
-    .update({ invoice_settings: settings })
+    .update({ invoice_settings: merged })
     .eq("id", user.id);
 
   if (error) {
-    if (error.message.includes("invoice_settings")) {
+    if (isInvoiceSettingsSchemaError(error.message)) {
       return {
         success: false as const,
-        errors: [
-          "Administrationseinstellungen konnten nicht gespeichert werden. Bitte Migration 003 ausführen.",
-        ],
+        errors: ["APP_SETTINGS_SAVE_FAILED"],
+        technical: [error.message],
       };
     }
-    return { success: false as const, errors: [error.message] };
+    return {
+      success: false as const,
+      errors: [error.message],
+      technical: [error.message],
+    };
   }
 
   revalidatePath("/settings");
+  revalidatePath("/settings/app");
   return { success: true as const };
 }
 
@@ -249,7 +290,7 @@ export async function buildRegeneratePayload(id: string): Promise<
 > {
   const invoice = await getInvoice(id);
   if (!invoice) return { success: false, errors: ["Rechnung nicht gefunden."] };
-  if (invoice.status === "draft" && !isInvoiceGenerated(invoice)) {
+  if (invoice.status === "draft" && !canRetryDocumentGeneration(invoice) && !isInvoiceGenerated(invoice)) {
     return { success: false, errors: ["Entwürfe müssen zuerst über die Rechnungserstellung generiert werden."] };
   }
 

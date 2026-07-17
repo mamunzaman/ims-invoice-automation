@@ -3,6 +3,7 @@
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { SidebarProvider, useSidebarLayout } from "@/components/layout/SidebarContext";
 import { Box } from "@mui/material";
+import { imsGlobalBackgroundSx } from "@/theme/designTokens";
 
 function DashboardMain({ children }: { children: React.ReactNode }) {
   const { mainOffset } = useSidebarLayout();
@@ -27,7 +28,7 @@ function DashboardMain({ children }: { children: React.ReactNode }) {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
-      <Box className="app-background" sx={{ minHeight: "100vh" }}>
+      <Box className="app-background" sx={imsGlobalBackgroundSx}>
         <AppSidebar />
         <DashboardMain>{children}</DashboardMain>
       </Box>

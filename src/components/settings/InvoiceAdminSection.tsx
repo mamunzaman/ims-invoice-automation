@@ -193,7 +193,9 @@ export function InvoiceAdminSection({
       {errors.length > 0 ? (
         <ImsAlert tone="error">
           {errors.map((e) => (
-            <Box key={e}>{e}</Box>
+            <Typography key={e} component="div" sx={{ fontSize: "inherit", color: "inherit" }}>
+              {e}
+            </Typography>
           ))}
         </ImsAlert>
       ) : null}

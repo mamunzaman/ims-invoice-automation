@@ -13,7 +13,7 @@ interface PreviewCardShellProps {
 
 export function PreviewCardShell({ title, subtitle, children }: PreviewCardShellProps) {
   return (
-    <Card sx={{ ...imsCardSx, boxShadow: "0 1px 2px rgba(16, 24, 40, 0.04)" }}>
+    <Card sx={imsCardSx}>
       <CardContent sx={{ p: 2.25 }}>
         <Stack spacing={0.35} sx={{ mb: 1.75, userSelect: "none" }}>
           <Typography

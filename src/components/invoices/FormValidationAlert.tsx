@@ -9,7 +9,7 @@ interface FormValidationAlertProps {
 }
 
 export function FormValidationAlert({
-  title = "Bitte Pflichtfelder prüfen",
+  title,
   messages,
 }: FormValidationAlertProps) {
   if (messages.length === 0) return null;
@@ -27,9 +27,11 @@ export function FormValidationAlert({
       <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
         <ErrorOutlineOutlinedIcon sx={{ fontSize: 18, color: "#b42318", mt: 0.25 }} />
         <Stack sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: "#912018", mb: 0.5 }}>
-            {title}
-          </Typography>
+          {title ? (
+            <Typography sx={{ fontSize: 13, fontWeight: 700, color: "#912018", mb: 0.5 }}>
+              {title}
+            </Typography>
+          ) : null}
           <Stack component="ul" spacing={0.25} sx={{ m: 0, pl: 2 }}>
             {messages.map((message) => (
               <Typography

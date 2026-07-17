@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import {
@@ -22,10 +22,12 @@ import { SectionCard } from "@/components/layout/SectionCard";
 import { StepIndicator, FORM_STEPS } from "@/components/invoices/StepIndicator";
 import { InvoicePreviewCard } from "@/components/invoices/InvoicePreviewCard";
 import { InvoiceFormSidebar } from "@/components/invoices/InvoiceFormSidebar";
-import { InvoiceGenerationSuccess } from "@/components/invoices/InvoiceGenerationSuccess";
 import { InvoiceGenerationProgressModal } from "@/components/invoices/InvoiceGenerationProgressModal";
 import { FormValidationAlert } from "@/components/invoices/FormValidationAlert";
+import { InvoiceErrorAlert } from "@/components/invoices/InvoiceErrorAlert";
 import { ImsButton, ImsSelect } from "@/components/forms/ims";
+import { imsSelectMenuProps } from "@/components/forms/ims/imsStyles";
+import { ClientOnly } from "@/components/ui/ClientOnly";
 import {
   customerDisplayName,
   paymentDeadlineFromCustomer,
@@ -44,16 +46,35 @@ import {
   DEFAULT_INVOICE_TITLE,
   composeInvoiceCustomerAddress,
   invoiceNotesMeta,
+  mergeSavedInvoiceIntoFormPayload,
   normalizeInvoiceFormData,
-  getServicePeriodFieldErrors,
   formatServicePeriod,
 } from "@/lib/invoice-form";
-import { sanitizeExternalUrl } from "@/lib/urls";
-import type { GenerationResultStep } from "@/lib/generation-status";
-import { buildDefaultCompletedSteps } from "@/lib/generation-status";
+import {
+  isGenerationActive,
+  isGenerationStatus,
+  resolveGenerationStatus,
+  type GenerationStatus,
+} from "@/lib/generation-status";
 import type { InvoiceGenerationStatusPayload } from "@/app/api/invoices/[id]/generation-status/route";
+import {
+  fetchInvoiceGenerationStatus,
+  isGenerateApiSuccess,
+  isGenerationStatusComplete,
+  mergeGenerateResults,
+  normalizeGenerateApiResult,
+  type InvoiceGenerateApiResponse,
+} from "@/lib/invoice-generation-client";
 import { imsColors, imsInputHeight } from "@/theme/imsTheme";
-import type { InvoiceFormData, Invoice, Customer, ProfileBankAccount } from "@/lib/types/database";
+import type {
+  InvoiceFormData,
+  Invoice,
+  Customer,
+  ProfileBankAccount,
+  TechnicalErrorsDisplay,
+} from "@/lib/types/database";
+import { createInvoice, updateInvoice } from "@/lib/actions/invoices";
+import { getFriendlyGenerationErrorContent } from "@/lib/invoice-errors";
 
 const VALIDATION_MESSAGE_KEYS = new Set([
   "invoiceDateRequired",
@@ -71,6 +92,94 @@ const VALIDATION_MESSAGE_KEYS = new Set([
   "genericError",
 ]);
 
+const GENERATION_STATUS_VERIFY_FAILED_MESSAGE =
+  "Could not verify the current generation status. Please try again.";
+
+const BACKGROUND_STATUS_INTERVAL_MS = 5000;
+
+function resolveProgressInitialStatus(
+  source:
+    | Pick<InvoiceGenerationStatusPayload, "generation_status" | "generation_step">
+    | Invoice
+    | null
+    | undefined
+): GenerationStatus {
+  if (!source) {
+    return "VALIDATING";
+  }
+
+  if ("generation_step" in source) {
+    const step = source.generation_step;
+    if (
+      step &&
+      isGenerationStatus(step) &&
+      step !== "PENDING" &&
+      step !== "FAILED" &&
+      step !== "COMPLETED"
+    ) {
+      return step;
+    }
+
+    const status = source.generation_status;
+    if (
+      status &&
+      isGenerationStatus(status) &&
+      status !== "PENDING" &&
+      status !== "FAILED" &&
+      status !== "COMPLETED"
+    ) {
+      return status;
+    }
+  }
+
+  if ("workflow_status" in source && "status" in source) {
+    return resolveGenerationStatus(source) ?? "VALIDATING";
+  }
+
+  return "VALIDATING";
+}
+
+function isInitialGenerationActive(initialData?: Invoice): boolean {
+  return Boolean(
+    initialData?.id &&
+      isGenerationActive(initialData.workflow_status, initialData.generation_status)
+  );
+}
+
+const VALIDATION_ERROR_TO_FIELD: Partial<Record<string, keyof InvoiceFormData>> = {
+  invoiceDateRequired: "invoice_date",
+  customerRequired: "customer_name",
+  serviceDescriptionRequired: "service_description",
+  amountNetRequired: "amount_net",
+  currencyRequired: "currency",
+  paymentDeadlineRequired: "payment_deadline",
+  servicePeriodStartRequired: "service_period_start",
+  servicePeriodEndRequired: "service_period_end",
+  servicePeriodEndAfterStart: "service_period_end",
+};
+
+const FIELD_FOCUS_ORDER: (keyof InvoiceFormData)[] = [
+  "invoice_date",
+  "service_period_start",
+  "service_period_end",
+  "customer_name",
+  "service_description",
+  "amount_net",
+  "payment_deadline",
+  "iban",
+];
+
+function focusFirstInvalidField(errors: InvoiceFieldErrors) {
+  for (const field of FIELD_FOCUS_ORDER) {
+    if (!errors[field]) continue;
+    const el = document.querySelector<HTMLElement>(`[name="${field}"]`);
+    if (!el) continue;
+    el.focus();
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    break;
+  }
+}
+
 interface InvoiceFormProps {
   initialData?: Invoice;
   defaults?: Partial<InvoiceFormData> & { default_bank_account_id?: string };
@@ -78,7 +187,8 @@ interface InvoiceFormProps {
   bankAccounts: ProfileBankAccount[];
   invoiceId?: string;
   mode: "create" | "edit";
-  onSave: (data: InvoiceFormData) => Promise<{
+  technicalErrorsDisplay?: TechnicalErrorsDisplay;
+  onSave?: (data: InvoiceFormData) => Promise<{
     success: boolean;
     errors?: string[];
     data?: Invoice | { invoice_number: string };
@@ -200,9 +310,12 @@ export function InvoiceForm({
   bankAccounts,
   invoiceId,
   mode,
+  technicalErrorsDisplay,
   onSave,
 }: InvoiceFormProps) {
   const router = useRouter();
+  const routeParams = useParams<{ id?: string }>();
+  const routeInvoiceId = typeof routeParams?.id === "string" ? routeParams.id : undefined;
   const t = useTranslations("invoice");
   const tValidation = useTranslations("validation");
   const tButtons = useTranslations("buttons");
@@ -211,6 +324,7 @@ export function InvoiceForm({
   const tAddress = useTranslations("address");
   const tBank = useTranslations("bankAccounts");
   const tSettings = useTranslations("settings");
+  const tInvoiceErrors = useTranslations("invoiceErrors");
   const tCurrency = useTranslations("currency");
   const tCustomers = useTranslations("customers");
 
@@ -229,6 +343,26 @@ export function InvoiceForm({
     [translateValidationMessage]
   );
 
+  const resolveEditInvoiceId = useCallback(() => {
+    return invoiceId ?? routeInvoiceId ?? initialData?.id;
+  }, [invoiceId, routeInvoiceId, initialData?.id]);
+
+  const persistInvoice = useCallback(
+    async (payload: InvoiceFormData) => {
+      if (mode === "edit") {
+        const editId = resolveEditInvoiceId();
+        if (!editId) {
+          return { success: false as const, errors: [tValidation("invoiceNotFound")] };
+        }
+        return updateInvoice(editId, payload);
+      }
+
+      const save = onSave ?? createInvoice;
+      return save(payload);
+    },
+    [mode, onSave, resolveEditInvoiceId, tValidation]
+  );
+
   const initialBank = resolveInitialBankState(bankAccounts, initialData, defaults);
 
   const [selectedBankAccountId, setSelectedBankAccountId] = useState(initialBank.selectedId);
@@ -237,26 +371,72 @@ export function InvoiceForm({
   );
   const [fieldErrors, setFieldErrors] = useState<InvoiceFieldErrors>({});
   const [errors, setErrors] = useState<string[]>([]);
-  const [webhookError, setWebhookError] = useState("");
+  const [generationTechnicalError, setGenerationTechnicalError] = useState(() =>
+    initialData?.generation_status === "FAILED" && initialData.generation_error
+      ? initialData.generation_error
+      : ""
+  );
+  const initialGenerationActive = isInitialGenerationActive(initialData);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [progressOpen, setProgressOpen] = useState(false);
-  const [progressInvoiceId, setProgressInvoiceId] = useState<string | null>(null);
+  const [progressOpen, setProgressOpen] = useState(initialGenerationActive);
+  const [progressInvoiceId, setProgressInvoiceId] = useState<string | null>(() =>
+    initialGenerationActive && initialData?.id ? initialData.id : null
+  );
   const [progressAttempt, setProgressAttempt] = useState(0);
+  const [progressInitialStatus, setProgressInitialStatus] = useState<GenerationStatus>(() =>
+    initialGenerationActive ? resolveProgressInitialStatus(initialData) : "VALIDATING"
+  );
+  const [generateCompletionSnapshot, setGenerateCompletionSnapshot] =
+    useState<InvoiceGenerationStatusPayload | null>(null);
   const generatePayloadRef = useRef<InvoiceFormData | null>(null);
-  const [successData, setSuccessData] = useState<{
-    invoice_id: string;
-    invoice_number: string;
-    customer_name: string;
-    amount_net: number;
-    invoice_date: string;
-    google_doc_url?: string;
-    pdf_url?: string;
-    generation_status: string;
-    generation_error?: string;
-    generated_at?: string;
-    steps?: GenerationResultStep[];
-  } | null>(null);
+  const generateRequestInFlightRef = useRef<string | null>(
+    initialGenerationActive && initialData?.id ? initialData.id : null
+  );
+  const [generateRequestInFlight, setGenerateRequestInFlight] = useState(initialGenerationActive);
+  const [backgroundStatusReconciliation, setBackgroundStatusReconciliation] = useState(false);
+  const backgroundReconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearGenerateRequestGuard = useCallback(() => {
+    generateRequestInFlightRef.current = null;
+    setGenerateRequestInFlight(false);
+    setBackgroundStatusReconciliation(false);
+    if (backgroundReconcileTimerRef.current) {
+      clearTimeout(backgroundReconcileTimerRef.current);
+      backgroundReconcileTimerRef.current = null;
+    }
+  }, []);
+
+  const generationLifecycleActive = generateRequestInFlight || progressOpen;
+
+  useEffect(() => {
+    if (!generationLifecycleActive) {
+      return;
+    }
+
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [generationLifecycleActive]);
+
+  useEffect(() => {
+    if (!initialGenerationActive || !initialData?.id) {
+      return;
+    }
+
+    generatePayloadRef.current = normalizeInvoiceFormData(form);
+  }, [initialGenerationActive, initialData, form]);
+
+  const shouldPreserveGenerateRequestGuard = useCallback((error: string) => {
+    const trimmed = error.trim();
+    return /^Generation timed out after \d+ seconds$/i.test(trimmed);
+  }, []);
 
   const normalizedForm = useMemo(() => normalizeInvoiceFormData(form), [form]);
 
@@ -268,10 +448,7 @@ export function InvoiceForm({
   const previewTotalAmount = amounts.gross_amount;
 
   const generateFieldErrors = useMemo(
-    () => ({
-      ...getInvoiceFieldErrors(normalizedForm, { requirePaymentDeadline: true }),
-      ...getServicePeriodFieldErrors(normalizedForm),
-    }),
+    () => getInvoiceFieldErrors(normalizedForm, { requirePaymentDeadline: true }),
     [normalizedForm]
   );
   const canGenerate = Object.keys(generateFieldErrors).length === 0;
@@ -355,14 +532,57 @@ export function InvoiceForm({
     return steps;
   }, [form, canGenerate]);
 
+  const hasFailedDraftGeneration = Boolean(
+    generationTechnicalError ||
+      (initialData?.generation_status === "FAILED" && initialData.status === "draft")
+  );
+
   const validationMessages = useMemo(() => {
     const messages = errors.map(translateValidationMessage);
-    if (webhookError) messages.push(webhookError);
     Object.values(fieldErrors).forEach((message) => {
       if (message) messages.push(translateValidationMessage(message));
     });
     return [...new Set(messages)];
-  }, [errors, webhookError, fieldErrors, translateValidationMessage]);
+  }, [errors, fieldErrors, translateValidationMessage]);
+
+  const hasFieldValidationErrors = Object.keys(fieldErrors).length > 0;
+
+  const validationAlertMessages = useMemo(() => {
+    if (hasFieldValidationErrors) {
+      return [tInvoiceErrors("validation.message")];
+    }
+    return validationMessages;
+  }, [hasFieldValidationErrors, validationMessages, tInvoiceErrors]);
+
+  const generationErrorAlert = useMemo(() => {
+    if (!generationTechnicalError) return null;
+    return getFriendlyGenerationErrorContent(generationTechnicalError, tInvoiceErrors, {
+      draftFailure: true,
+    });
+  }, [generationTechnicalError, tInvoiceErrors]);
+
+  const applyValidationErrors = useCallback(
+    (errorList: string[]) => {
+      const nextFieldErrors: InvoiceFieldErrors = {};
+      const genericErrors: string[] = [];
+
+      for (const key of errorList) {
+        const field = VALIDATION_ERROR_TO_FIELD[key];
+        if (field) {
+          nextFieldErrors[field] = key;
+        } else {
+          genericErrors.push(translateValidationMessage(key));
+        }
+      }
+
+      setFieldErrors(nextFieldErrors);
+      setErrors(genericErrors);
+      if (Object.keys(nextFieldErrors).length > 0) {
+        focusFirstInvalidField(nextFieldErrors);
+      }
+    },
+    [translateValidationMessage]
+  );
 
   function updateField<K extends keyof InvoiceFormData>(field: K, value: InvoiceFormData[K]) {
     setForm((prev) => {
@@ -374,7 +594,14 @@ export function InvoiceForm({
       }
       return next;
     });
-    if (fieldErrors[field]) {
+    if (field === "service_period_start" || field === "service_period_end") {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next.service_period_start;
+        delete next.service_period_end;
+        return next;
+      });
+    } else if (fieldErrors[field]) {
       setFieldErrors((prev) => {
         const next = { ...prev };
         delete next[field];
@@ -433,13 +660,17 @@ export function InvoiceForm({
   async function handleSaveDraft(e: React.FormEvent) {
     e.preventDefault();
     setErrors([]);
-    setWebhookError("");
+    setGenerationTechnicalError("");
     setSaving(true);
 
     const payload = normalizeInvoiceFormData(form);
-    const result = await onSave(payload);
+    const result = await persistInvoice(payload);
     if (!result.success) {
-      setErrors(result.errors || [tValidation("saveFailed")]);
+      if (result.errors?.length) {
+        applyValidationErrors(result.errors);
+      } else {
+        setErrors([tValidation("saveFailed")]);
+      }
       setSaving(false);
       return;
     }
@@ -456,84 +687,308 @@ export function InvoiceForm({
     setSaving(false);
   }
 
-  function applySuccessFromSnapshot(data: InvoiceGenerationStatusPayload) {
-    setProgressOpen(false);
+  const applySuccessFromSnapshot = useCallback(
+    (data: InvoiceGenerationStatusPayload) => {
+      clearGenerateRequestGuard();
+      setProgressOpen(false);
+      setGenerating(false);
+      setGenerateCompletionSnapshot(null);
+      setGenerationTechnicalError("");
+
+      // Navigate to refreshed invoice detail (generated state)
+      router.push(`/invoices/${data.id}`);
+      router.refresh();
+    },
+    [clearGenerateRequestGuard, router]
+  );
+
+  const handleGenerationFailed = useCallback((error: string) => {
+    if (!shouldPreserveGenerateRequestGuard(error)) {
+      clearGenerateRequestGuard();
+    } else {
+      setBackgroundStatusReconciliation(true);
+    }
+
+    setGenerationTechnicalError(error);
     setGenerating(false);
-    const googleDocUrl = sanitizeExternalUrl(data.google_doc_url) ?? undefined;
-    const pdfUrl = sanitizeExternalUrl(data.pdf_url) ?? undefined;
-    setSuccessData({
-      invoice_id: data.id,
-      invoice_number: data.invoice_number || form.invoice_number,
-      customer_name: form.customer_name,
-      amount_net: parseFloat(form.amount_net),
-      invoice_date: form.invoice_date,
-      google_doc_url: googleDocUrl,
-      pdf_url: pdfUrl,
-      generation_status: "COMPLETED",
-      generated_at: new Date().toISOString(),
-      steps: buildDefaultCompletedSteps({ googleDocUrl, pdfUrl }),
-    });
-  }
+  }, [clearGenerateRequestGuard, shouldPreserveGenerateRequestGuard]);
+
+  useEffect(() => {
+    if (!backgroundStatusReconciliation || !progressInvoiceId || !generateRequestInFlight) {
+      return;
+    }
+
+    const invoiceId = progressInvoiceId;
+    let cancelled = false;
+
+    const scheduleNextCheck = () => {
+      if (cancelled) {
+        return;
+      }
+
+      if (backgroundReconcileTimerRef.current) {
+        clearTimeout(backgroundReconcileTimerRef.current);
+      }
+
+      backgroundReconcileTimerRef.current = setTimeout(() => {
+        void runBackgroundStatusCheck();
+      }, BACKGROUND_STATUS_INTERVAL_MS);
+    };
+
+    async function runBackgroundStatusCheck() {
+      if (cancelled) {
+        return;
+      }
+
+      const status = await fetchInvoiceGenerationStatus(invoiceId);
+      if (cancelled) {
+        return;
+      }
+
+      if (!status) {
+        scheduleNextCheck();
+        return;
+      }
+
+      if (isGenerationStatusComplete(status)) {
+        setBackgroundStatusReconciliation(false);
+        const snapshot =
+          mergeGenerateResults(null, status, { preferSecondForCompletion: true }) ?? status;
+        applySuccessFromSnapshot({
+          ...snapshot,
+          generation_status: "COMPLETED",
+          generation_step: "COMPLETED",
+        });
+        return;
+      }
+
+      if (status.generation_status === "FAILED") {
+        setBackgroundStatusReconciliation(false);
+        handleGenerationFailed(status.generation_error?.trim() || "UNKNOWN_GENERATION_ERROR");
+        return;
+      }
+
+      if (isGenerationActive(status.workflow_status, status.generation_status)) {
+        scheduleNextCheck();
+        return;
+      }
+
+      setBackgroundStatusReconciliation(false);
+    }
+
+    void runBackgroundStatusCheck();
+
+    return () => {
+      cancelled = true;
+      if (backgroundReconcileTimerRef.current) {
+        clearTimeout(backgroundReconcileTimerRef.current);
+        backgroundReconcileTimerRef.current = null;
+      }
+    };
+  }, [
+    backgroundStatusReconciliation,
+    progressInvoiceId,
+    generateRequestInFlight,
+    applySuccessFromSnapshot,
+    handleGenerationFailed,
+  ]);
+
+  const resumeExistingGeneration = useCallback(
+    (
+      invoiceId: string,
+      payload?: InvoiceFormData,
+      status?: Pick<InvoiceGenerationStatusPayload, "generation_status" | "generation_step"> | Invoice | null
+    ) => {
+      if (payload) {
+        generatePayloadRef.current = payload;
+      }
+
+      setGenerationTechnicalError("");
+      setGenerating(false);
+      setGenerateCompletionSnapshot(null);
+      setProgressInitialStatus(resolveProgressInitialStatus(status ?? initialData));
+      setProgressAttempt((attempt) => attempt + 1);
+      setProgressInvoiceId(invoiceId);
+      setProgressOpen(true);
+      generateRequestInFlightRef.current = invoiceId;
+      setGenerateRequestInFlight(true);
+    },
+    [initialData]
+  );
 
   async function startGenerateRequest(id: string, payload: InvoiceFormData) {
+    if (generateRequestInFlightRef.current === id) {
+      resumeExistingGeneration(id, payload);
+      return;
+    }
+
+    const currentStatus = await fetchInvoiceGenerationStatus(id);
+    if (!currentStatus) {
+      setGenerationTechnicalError(GENERATION_STATUS_VERIFY_FAILED_MESSAGE);
+      setGenerating(false);
+      return;
+    }
+
+    if (isGenerationActive(currentStatus.workflow_status, currentStatus.generation_status)) {
+      resumeExistingGeneration(id, payload, currentStatus);
+      return;
+    }
+
+    generateRequestInFlightRef.current = id;
+    setGenerateRequestInFlight(true);
+
     try {
       const response = await fetch(`/api/invoices/${id}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        if (data.errors) {
-          setErrors(data.errors);
-        } else {
-          setWebhookError(data.error || t("generationFailed"));
+      const data = (await response.json()) as InvoiceGenerateApiResponse & {
+        uncertain?: boolean;
+        check_generation_status?: boolean;
+        error_code?: string;
+      };
+
+      if (response.ok && isGenerateApiSuccess(data)) {
+        const normalized = normalizeGenerateApiResult(id, data);
+
+        setGenerationTechnicalError("");
+        const refetched = await fetchInvoiceGenerationStatus(id);
+        const snapshot = mergeGenerateResults(refetched, normalized, {
+          preferSecondForCompletion: true,
+        }) ?? normalized;
+        if (process.env.NODE_ENV === "development") {
+          console.debug("[generate] completed", {
+            invoice_number: snapshot.invoice_number,
+            generation_status: snapshot.generation_status,
+            workflow_status: snapshot.workflow_status,
+            pdf_url: snapshot.pdf_url,
+            docx_url: snapshot.docx_url,
+          });
         }
-        setProgressOpen(false);
-        setGenerating(false);
+        setGenerateCompletionSnapshot(snapshot);
+        return;
       }
+
+      if (!response.ok) {
+        if (data.uncertain === true && data.check_generation_status === true) {
+          setBackgroundStatusReconciliation(true);
+          return;
+        }
+
+        if (data.error_code === "N8N_WEBHOOK_UNAVAILABLE") {
+          setGenerationTechnicalError(data.generation_error || data.error || "UNKNOWN_GENERATION_ERROR");
+          setGenerating(false);
+          clearGenerateRequestGuard();
+          return;
+        }
+
+        if (data.errors?.length) {
+          applyValidationErrors(data.errors);
+          setProgressOpen(false);
+        } else {
+          setGenerationTechnicalError(
+            data.generation_error || data.workflow_error || data.error || "UNKNOWN_GENERATION_ERROR"
+          );
+        }
+        setGenerating(false);
+        clearGenerateRequestGuard();
+        return;
+      }
+
+      setGenerationTechnicalError("UNKNOWN_GENERATION_ERROR");
+      setGenerating(false);
+      clearGenerateRequestGuard();
     } catch {
-      setWebhookError(t("webhookConnectionFailed"));
+      setGenerationTechnicalError("UNKNOWN_GENERATION_ERROR");
+      setGenerating(false);
     }
   }
 
   async function handleGenerate() {
     setErrors([]);
-    setWebhookError("");
+    setGenerationTechnicalError("");
+    setGenerateCompletionSnapshot(null);
 
-    const validationErrors = getInvoiceFieldErrors(form, { requirePaymentDeadline: true });
+    const validationErrors = getInvoiceFieldErrors(normalizeInvoiceFormData(form), {
+      requirePaymentDeadline: true,
+    });
     if (Object.keys(validationErrors).length > 0) {
       setFieldErrors(validationErrors);
+      focusFirstInvalidField(validationErrors);
       return;
+    }
+
+    const payload = normalizeInvoiceFormData(form);
+    const existingId = resolveEditInvoiceId();
+
+    if (existingId) {
+      const liveStatus = await fetchInvoiceGenerationStatus(existingId);
+      if (!liveStatus) {
+        setGenerationTechnicalError(GENERATION_STATUS_VERIFY_FAILED_MESSAGE);
+        return;
+      }
+
+      if (isGenerationActive(liveStatus.workflow_status, liveStatus.generation_status)) {
+        resumeExistingGeneration(existingId, payload, liveStatus);
+        return;
+      }
     }
 
     setGenerating(true);
 
-    const payload = normalizeInvoiceFormData(form);
-    const saveResult = await onSave(payload);
+    if (existingId) {
+      setProgressAttempt((attempt) => attempt + 1);
+      setProgressInvoiceId(existingId);
+      setProgressOpen(true);
+    }
+
+    const saveResult = await persistInvoice(payload);
     if (!saveResult.success) {
-      setErrors(saveResult.errors || [tValidation("saveFailed")]);
+      if (saveResult.errors?.length) {
+        applyValidationErrors(saveResult.errors);
+      } else {
+        setErrors([tValidation("saveFailed")]);
+      }
+      setProgressOpen(false);
       setGenerating(false);
       return;
     }
+
+    const savedInvoice =
+      saveResult.data && "net_amount" in saveResult.data
+        ? saveResult.data
+        : null;
 
     if (saveResult.data?.invoice_number) {
       setForm((prev) => ({ ...prev, invoice_number: saveResult.data!.invoice_number }));
     }
 
-    const id = invoiceId || (saveResult.data && "id" in saveResult.data ? saveResult.data.id : undefined);
+    const id =
+      savedInvoice?.id ??
+      existingId ??
+      (saveResult.data && "id" in saveResult.data ? saveResult.data.id : undefined);
     if (!id) {
       setErrors([t("invoiceSaveFailed")]);
+      setProgressOpen(false);
       setGenerating(false);
       return;
     }
 
-    generatePayloadRef.current = payload;
-    setProgressAttempt((attempt) => attempt + 1);
-    setProgressInvoiceId(id);
-    setProgressOpen(true);
+    const generatePayload = savedInvoice
+      ? mergeSavedInvoiceIntoFormPayload(payload, savedInvoice)
+      : payload;
+
+    generatePayloadRef.current = generatePayload;
+
+    if (!existingId) {
+      setProgressAttempt((attempt) => attempt + 1);
+      setProgressInvoiceId(id);
+      setProgressOpen(true);
+    }
+
     setGenerating(false);
-    void startGenerateRequest(id, payload);
+    void startGenerateRequest(id, generatePayload);
   }
 
   const progressModal = (
@@ -541,37 +996,25 @@ export function InvoiceForm({
       key={`${progressInvoiceId ?? "new"}-${progressAttempt}`}
       open={progressOpen}
       invoiceId={progressInvoiceId}
-      initialStatus="VALIDATING"
+      initialStatus={progressInitialStatus}
+      externalCompletion={generateCompletionSnapshot}
       onCompleted={applySuccessFromSnapshot}
-      onFailed={(error) => {
-        setWebhookError(error);
-        setGenerating(false);
-      }}
+      onFailed={handleGenerationFailed}
       onClose={() => {
         setProgressOpen(false);
         setGenerating(false);
       }}
       onRetry={() => {
         if (!progressInvoiceId || !generatePayloadRef.current) return;
+        setGenerateCompletionSnapshot(null);
+        setGenerationTechnicalError("");
         setProgressAttempt((attempt) => attempt + 1);
-        void startGenerateRequest(progressInvoiceId, generatePayloadRef.current);
+        const retryPayload = normalizeInvoiceFormData(form);
+        generatePayloadRef.current = retryPayload;
+        void startGenerateRequest(progressInvoiceId, retryPayload);
       }}
     />
   );
-
-  if (successData) {
-    return (
-      <>
-        {progressModal}
-        <InvoiceGenerationSuccess
-          data={{
-            ...successData,
-            currency: form.currency,
-          }}
-        />
-      </>
-    );
-  }
 
   const previewYear = form.invoice_date
     ? new Date(form.invoice_date).getFullYear()
@@ -601,6 +1044,9 @@ export function InvoiceForm({
     <Box
       component="form"
       onSubmit={handleSaveDraft}
+      autoComplete="off"
+      data-lpignore="true"
+      data-form-type="other"
       sx={{
         display: "grid",
         gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) 300px" },
@@ -609,7 +1055,22 @@ export function InvoiceForm({
       }}
     >
       <Stack spacing={2.25}>
-        <FormValidationAlert messages={validationMessages} />
+        {validationAlertMessages.length > 0 ? (
+          <FormValidationAlert
+            title={tInvoiceErrors("validation.title")}
+            messages={validationAlertMessages}
+          />
+        ) : null}
+        {generationErrorAlert ? (
+          <InvoiceErrorAlert
+            title={generationErrorAlert.title}
+            messages={[generationErrorAlert.message]}
+            technicalDetails={generationErrorAlert.technicalDetails}
+            technicalDetailsLabel={tInvoiceErrors("technicalDetails")}
+            technicalErrorsDisplay={technicalErrorsDisplay}
+            tone="info"
+          />
+        ) : null}
 
         <SectionCard
           id="invoice-section-rechnungsdaten"
@@ -696,6 +1157,7 @@ export function InvoiceForm({
                 name="customer_id"
                 value={form.customer_id}
                 onChange={(e) => handleCustomerSelect(e.target.value)}
+                slotProps={{ select: { MenuProps: imsSelectMenuProps } }}
               >
                 <MenuItem value="">{t("enterManually")}</MenuItem>
                 {customers.map((c) => (
@@ -806,38 +1268,47 @@ export function InvoiceForm({
               <Typography sx={{ fontSize: 13, fontWeight: 600, color: imsColors.textDark, mb: 1.75 }}>
                 {t("amountNet")}
               </Typography>
-              <Grid container spacing={2} sx={{ alignItems: "flex-end" }}>
-                <Grid size={{ xs: 12, md: 8 }}>
-                  <TextField
-                    label={t("amountNet")}
-                    type="number"
-                    required
-                    slotProps={{ htmlInput: { step: "0.01", min: 0 } }}
-                    name="amount_net"
-                    value={form.amount_net}
-                    onChange={(e) => updateField("amount_net", e.target.value)}
-                    error={Boolean(fieldErrors.amount_net)}
-                    helperText={translateFieldError(fieldErrors.amount_net) || t("netAmountHint")}
-                    fullWidth
-                  />
-                </Grid>
-                <Grid size={{ xs: 12, md: 4 }}>
-                  <TextField
-                    select
-                    label={t("currency")}
-                    name="currency"
-                    value={form.currency}
-                    onChange={(e) => updateField("currency", e.target.value)}
-                    fullWidth
-                  >
-                    {CURRENCY_OPTIONS.map((option) => (
-                      <MenuItem key={option.value} value={option.value}>
-                        {tCurrency(option.value as "EUR" | "USD" | "GBP" | "CHF")}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                </Grid>
-              </Grid>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 2.5,
+                  gridTemplateColumns: {
+                    xs: "1fr",
+                    md: "minmax(0, 1fr) minmax(220px, 360px)",
+                  },
+                  alignItems: "start",
+                }}
+              >
+                <TextField
+                  label={t("amountNet")}
+                  type="number"
+                  required
+                  slotProps={{ htmlInput: { step: "0.01", min: 0 } }}
+                  name="amount_net"
+                  value={form.amount_net}
+                  onChange={(e) => updateField("amount_net", e.target.value)}
+                  error={Boolean(fieldErrors.amount_net)}
+                  helperText={translateFieldError(fieldErrors.amount_net) || t("netAmountHint")}
+                  fullWidth
+                  sx={{ "& .MuiInputBase-root": { minHeight: imsInputHeight } }}
+                />
+                <TextField
+                  select
+                  label={t("currency")}
+                  name="currency"
+                  value={form.currency}
+                  onChange={(e) => updateField("currency", e.target.value)}
+                  fullWidth
+                  sx={{ "& .MuiInputBase-root": { minHeight: imsInputHeight } }}
+                  slotProps={{ select: { MenuProps: imsSelectMenuProps } }}
+                >
+                  {CURRENCY_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {tCurrency(option.value as "EUR" | "USD" | "GBP" | "CHF")}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              </Box>
             </Box>
 
             <Box
@@ -919,6 +1390,7 @@ export function InvoiceForm({
                 name="bank_account_id"
                 value={selectedBankAccountId}
                 onChange={(e) => handleBankAccountSelect(e.target.value)}
+                slotProps={{ select: { MenuProps: imsSelectMenuProps } }}
               >
                 <MenuItem value="">{t("enterManually")}</MenuItem>
                 {bankAccounts.map((account) => (
@@ -1025,14 +1497,16 @@ export function InvoiceForm({
             type="button"
             endIcon={<ArrowForwardIcon />}
             onClick={handleGenerate}
-            disabled={!canGenerate || generating || progressOpen}
+            disabled={!canGenerate || generating || progressOpen || generateRequestInFlight}
             loading={generating}
           >
             {generating
               ? t("generating")
-              : mode === "create"
-                ? t("continueToReview")
-                : tButtons("createInvoice")}
+              : hasFailedDraftGeneration
+                ? t("retryDocumentGeneration")
+                : mode === "create"
+                  ? t("continueToReview")
+                  : tButtons("createInvoice")}
           </ImsButton>
         </Stack>
       </Stack>
@@ -1092,7 +1566,7 @@ export function InvoiceForm({
             completedSteps={completedSteps}
             onStepClick={handleStepClick}
           />
-          {formBody}
+          <ClientOnly fallback={<Box sx={{ minHeight: 720 }} aria-hidden />}>{formBody}</ClientOnly>
         </Stack>
       </PageShell>
       </>
@@ -1104,7 +1578,7 @@ export function InvoiceForm({
       {progressModal}
       <Stack spacing={2}>
       <Typography variant="h5">{t("editInvoice")}</Typography>
-      {formBody}
+      <ClientOnly fallback={<Box sx={{ minHeight: 720 }} aria-hidden />}>{formBody}</ClientOnly>
     </Stack>
     </>
   );
@@ -1146,6 +1620,7 @@ function ServicePeriodFieldGroup({
       <Grid container spacing={2} sx={{ alignItems: "center" }}>
         <Grid size={{ xs: 12, md: 5 }}>
           <TextField
+            name="service_period_start"
             label={t("servicePeriodStart")}
             type="date"
             required
@@ -1162,6 +1637,7 @@ function ServicePeriodFieldGroup({
         </Grid>
         <Grid size={{ xs: 12, md: 5 }}>
           <TextField
+            name="service_period_end"
             label={t("servicePeriodEnd")}
             type="date"
             required

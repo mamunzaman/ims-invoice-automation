@@ -6,6 +6,7 @@ import {
   invoiceNotesMeta,
   normalizeInvoiceFormData,
   normalizeIsoDate,
+  getServicePeriodFieldErrors,
   type InvoiceWebhookProfile,
 } from "@/lib/invoice-form";
 import {
@@ -14,7 +15,8 @@ import {
   INVOICE_LABELS,
   resolveInvoiceCurrency,
 } from "@/lib/utils";
-import { sanitizeExternalUrl } from "@/lib/urls";
+import { normalizeDocumentLink } from "@/lib/urls";
+import { resolveStoredDropboxSharedUrl } from "@/lib/dropbox-documents";
 import {
   buildDefaultCompletedSteps,
   type GenerationResultStep,
@@ -52,7 +54,7 @@ export function getInvoiceFieldErrors(
     errors.payment_deadline = "paymentDeadlineRequired";
   }
 
-  return errors;
+  return { ...errors, ...getServicePeriodFieldErrors(normalized) };
 }
 
 export function validateInvoiceForm(
@@ -83,7 +85,18 @@ export function invoiceToWebhookPayload(
   const bic = form.bic || storedMeta.bic || null;
   const bank_name = form.bank_name || storedMeta.bank_name || null;
 
-  const amounts = calculateInvoiceAmounts(form.amount_net, invoice.is_small_business);
+  const smallBusiness = invoice.is_small_business ?? form.small_business_rule;
+  const persistedAmounts =
+    Number.isFinite(Number(invoice.net_amount)) && Number(invoice.net_amount) > 0
+      ? {
+          net_amount: Number(invoice.net_amount),
+          vat_rate: Number(invoice.vat_rate ?? 0),
+          vat_amount: Number(invoice.vat_amount ?? 0),
+          gross_amount: Number(invoice.gross_amount ?? invoice.net_amount),
+        }
+      : null;
+  const amounts =
+    persistedAmounts ?? calculateInvoiceAmounts(form.amount_net, smallBusiness);
   const company = parseCompanyAddress(profile || null);
   const currency = resolveInvoiceCurrency(invoice.currency);
   const paymentDue = normalizeIsoDate(invoice.payment_deadline || form.payment_deadline);
@@ -133,7 +146,7 @@ export function invoiceToWebhookPayload(
     bic,
     bank_name,
     currency,
-    small_business_rule: invoice.is_small_business,
+    small_business_rule: smallBusiness,
     small_business_notice,
     payment_terms,
     optional_notes,
@@ -149,7 +162,7 @@ export function invoiceToWebhookPayload(
 }
 
 export const N8N_WEBHOOK_NOT_FOUND_MESSAGE =
-  "n8n Webhook nicht gefunden. Prüfe: Workflow aktiv? Production-URL statt Test-URL? Webhook-Pfad korrekt?";
+  "n8n webhook is not active. Activate the production webhook or click Execute Workflow in n8n test mode.";
 
 export function maskWebhookUrl(url: string): string {
   try {
@@ -196,7 +209,98 @@ export class N8nWebhookError extends Error {
   }
 }
 
-export async function callN8nWebhook(payload: Record<string, unknown>) {
+export class N8nWebhookUnavailableError extends Error {
+  readonly statusCode: number;
+  readonly webhookMode: "test" | "production" | "unknown";
+  readonly responseBody?: string;
+
+  constructor(options: {
+    message: string;
+    statusCode: number;
+    webhookMode: "test" | "production" | "unknown";
+    responseBody?: string;
+  }) {
+    super(options.message);
+    this.name = "N8nWebhookUnavailableError";
+    this.statusCode = options.statusCode;
+    this.webhookMode = options.webhookMode;
+    this.responseBody = options.responseBody;
+  }
+}
+
+export interface N8nWebhookCallResult {
+  httpStatus: number;
+  rawText: string;
+  rawResult: unknown;
+  n8nResult: Record<string, unknown>;
+}
+
+export function normalizeN8nWebhookPayload(rawResult: unknown): Record<string, unknown> {
+  const candidate = Array.isArray(rawResult) ? rawResult[0] : rawResult;
+  if (!candidate || typeof candidate !== "object") return {};
+
+  const record = candidate as Record<string, unknown>;
+  if (record.json && typeof record.json === "object" && !Array.isArray(record.json)) {
+    return record.json as Record<string, unknown>;
+  }
+
+  return record;
+}
+
+const N8N_RESPONSE_TIMEOUT_MS = 30_000;
+
+function resolveWebhookMode(webhookUrl: string): "test" | "production" | "unknown" {
+  if (webhookUrl.includes("/webhook-test/")) {
+    return "test";
+  }
+  if (webhookUrl.includes("/webhook/")) {
+    return "production";
+  }
+  return "unknown";
+}
+
+function isN8nWebhookUnavailableResponse(statusCode: number, responseBody: string): boolean {
+  if (statusCode !== 404) {
+    return false;
+  }
+
+  const normalized = responseBody.toLowerCase();
+
+  return (
+    normalized.includes("webhook is not registered") ||
+    normalized.includes("requested webhook is not registered") ||
+    normalized.includes("webhook not found") ||
+    normalized.includes("webhook does not exist") ||
+    normalized.includes("not currently registered") ||
+    normalized.includes("test webhook")
+  );
+}
+
+function throwIfN8nWebhookUnavailable(
+  statusCode: number,
+  responseBody: string,
+  webhookMode: "test" | "production" | "unknown"
+): void {
+  if (!isN8nWebhookUnavailableResponse(statusCode, responseBody)) {
+    return;
+  }
+
+  const message =
+    webhookMode === "test"
+      ? 'The n8n test webhook is not listening. Open the workflow in n8n and click "Listen for test event" or "Execute workflow", then try again.'
+      : webhookMode === "production"
+        ? "The n8n production webhook is not available. Confirm that the workflow is active and that the production webhook URL is correct."
+        : "The configured n8n webhook is not available. Confirm that the webhook URL is correct and that the workflow is listening.";
+
+  throw new N8nWebhookUnavailableError({
+    message,
+    statusCode,
+    webhookMode,
+    responseBody: responseBody.slice(0, 500),
+  });
+}
+
+export async function callN8nWebhook(payload: Record<string, unknown>): Promise<N8nWebhookCallResult> {
   const webhookUrl = process.env.N8N_INVOICE_WEBHOOK_URL;
   const secret = process.env.N8N_INVOICE_SECRET;
 
@@ -204,40 +308,89 @@ export async function callN8nWebhook(payload: Record<string, unknown>) {
     throw new Error("n8n Webhook-Konfiguration fehlt.");
   }
 
+  const webhookMode = resolveWebhookMode(webhookUrl);
+
   console.error(`[n8n] Calling webhook: ${maskWebhookUrl(webhookUrl)}`);
 
-  const response = await fetch(webhookUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-invoice-secret": secret,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const text = await response.text();
-  let data: Record<string, unknown> = {};
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, N8N_RESPONSE_TIMEOUT_MS);
 
   try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-invoice-secret": secret,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    throwIfN8nWebhookUnavailable(response.status, text, webhookMode);
+    let rawResult: unknown = {};
+
+    try {
+      rawResult = text ? JSON.parse(text) : {};
+    } catch {
+      console.error("[n8n] HTTP status:", response.status);
+      console.error("[n8n] Raw response (non-JSON):", text.slice(0, 2000));
+      if (!response.ok) {
+        const message = n8nWebhookErrorMessage(response.status, text.slice(0, 200));
+        throw new N8nWebhookError(message, response.status, text.slice(0, 500));
+      }
+      throw new Error(`Ungültige Antwort vom n8n Webhook: ${text.slice(0, 200)}`);
+    }
+
+    const n8nResult = normalizeN8nWebhookPayload(rawResult);
+
+    console.error("[n8n] HTTP status:", response.status);
+    console.error("[n8n] Raw n8n response:", JSON.stringify(rawResult).slice(0, 2000));
+    console.error("[n8n] Normalized n8n result:", JSON.stringify(n8nResult).slice(0, 2000));
+
     if (!response.ok) {
-      const message = n8nWebhookErrorMessage(response.status, text.slice(0, 200));
+      const detail =
+        (n8nResult.error as string) ||
+        (n8nResult.message as string) ||
+        text.slice(0, 200);
+      const message = n8nWebhookErrorMessage(response.status, detail);
+      console.error(
+        `[n8n] Webhook failed: HTTP ${response.status} — ${maskWebhookUrl(webhookUrl)} — ${detail}`
+      );
       throw new N8nWebhookError(message, response.status, text.slice(0, 500));
     }
-    throw new Error(`Ungültige Antwort vom n8n Webhook: ${text.slice(0, 200)}`);
-  }
 
-  if (!response.ok) {
-    const detail = (data.error as string) || (data.message as string) || text.slice(0, 200);
-    const message = n8nWebhookErrorMessage(response.status, detail);
-    console.error(
-      `[n8n] Webhook failed: HTTP ${response.status} — ${maskWebhookUrl(webhookUrl)} — ${detail}`
-    );
-    throw new N8nWebhookError(message, response.status, text.slice(0, 500));
-  }
+    return {
+      httpStatus: response.status,
+      rawText: text,
+      rawResult,
+      n8nResult,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        "n8n response timed out after 30 seconds. The workflow may still be running."
+      );
+    }
 
-  return data;
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function readN8nStringField(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function unwrapN8nResponse(data: unknown): Record<string, unknown> {
+  return normalizeN8nWebhookPayload(data);
+}
+
+function readN8nDocumentLink(value: unknown): string | null {
+  return normalizeDocumentLink(typeof value === "string" ? value : null);
 }
 
 export interface N8nDocumentUrls {
@@ -245,26 +398,82 @@ export interface N8nDocumentUrls {
   pdf_url: string | null;
   google_doc_id: string | null;
   pdf_file_id: string | null;
+  docx_url: string | null;
+  docx_file_id: string | null;
+  dropbox_pdf_url: string | null;
+  dropbox_docx_url: string | null;
+}
+
+export interface N8nGenerationResponse extends N8nDocumentUrls {
+  success: boolean;
+  workflow_status: string | null;
+  invoice_number: string | null;
+  steps: GenerationResultStep[];
+  raw: Record<string, unknown>;
 }
 
 export function parseN8nDocumentUrls(response: Record<string, unknown>): N8nDocumentUrls {
+  const parsed = parseN8nGenerationResponse(response);
   return {
-    google_doc_url: sanitizeExternalUrl(response.google_doc_url as string | undefined),
-    pdf_url: sanitizeExternalUrl(response.pdf_url as string | undefined),
-    google_doc_id:
-      typeof response.google_doc_id === "string" && response.google_doc_id.trim()
-        ? response.google_doc_id.trim()
-        : null,
-    pdf_file_id:
-      typeof response.pdf_file_id === "string" && response.pdf_file_id.trim()
-        ? response.pdf_file_id.trim()
-        : null,
+    google_doc_url: parsed.google_doc_url,
+    pdf_url: parsed.pdf_url,
+    google_doc_id: parsed.google_doc_id,
+    pdf_file_id: parsed.pdf_file_id,
+    docx_url: parsed.docx_url,
+    docx_file_id: parsed.docx_file_id,
+    dropbox_pdf_url: parsed.dropbox_pdf_url,
+    dropbox_docx_url: parsed.dropbox_docx_url,
+  };
+}
+
+export function parseN8nGenerationResponse(data: unknown): N8nGenerationResponse {
+  const response = unwrapN8nResponse(data);
+  const success = response.success !== false;
+  const google_doc_url = readN8nDocumentLink(response.google_doc_url);
+  const pdf_url = readN8nDocumentLink(response.pdf_url);
+  const docx_url = readN8nDocumentLink(response.docx_url);
+  const dropbox_pdf_url = readN8nDocumentLink(response.dropbox_pdf_url);
+  const dropbox_docx_url = readN8nDocumentLink(response.dropbox_docx_url);
+
+  const steps = parseN8nGenerationSteps(response, {
+    googleDocUrl: google_doc_url,
+    pdfUrl: pdf_url,
+    docxUrl: docx_url,
+    dropboxPdfUrl: dropbox_pdf_url,
+    dropboxDocxUrl: dropbox_docx_url,
+  });
+
+  const resolvedDropboxPdfUrl =
+    resolveStoredDropboxSharedUrl(dropbox_pdf_url, steps, "pdf") ?? dropbox_pdf_url;
+  const resolvedDropboxDocxUrl =
+    resolveStoredDropboxSharedUrl(dropbox_docx_url, steps, "docx") ?? dropbox_docx_url;
+
+  return {
+    success,
+    workflow_status: readN8nStringField(response.workflow_status),
+    invoice_number: readN8nStringField(response.invoice_number),
+    google_doc_url,
+    pdf_url,
+    google_doc_id: readN8nStringField(response.google_doc_id),
+    pdf_file_id: readN8nStringField(response.pdf_file_id),
+    docx_url,
+    docx_file_id: readN8nStringField(response.docx_file_id),
+    dropbox_pdf_url: resolvedDropboxPdfUrl,
+    dropbox_docx_url: resolvedDropboxDocxUrl,
+    steps,
+    raw: response,
   };
 }
 
 export function parseN8nGenerationSteps(
   response: Record<string, unknown>,
-  fallbackUrls?: { googleDocUrl?: string | null; pdfUrl?: string | null }
+  fallbackUrls?: {
+    googleDocUrl?: string | null;
+    pdfUrl?: string | null;
+    docxUrl?: string | null;
+    dropboxPdfUrl?: string | null;
+    dropboxDocxUrl?: string | null;
+  }
 ): GenerationResultStep[] {
   const rawSteps = response.steps;
 
@@ -278,7 +487,7 @@ export function parseN8nGenerationSteps(
       const key = typeof step.key === "string" ? step.key.trim() : "";
       const label = typeof step.label === "string" ? step.label.trim() : "";
       const status = typeof step.status === "string" ? step.status.trim() : "completed";
-      const url = sanitizeExternalUrl(step.url as string | undefined);
+      const url = readN8nDocumentLink(step.url as string | undefined);
 
       if (!key || !label) continue;
 

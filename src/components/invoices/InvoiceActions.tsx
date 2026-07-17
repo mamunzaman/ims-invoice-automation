@@ -21,8 +21,13 @@ export function InvoiceStatusActions({
 
   async function handleDuplicate() {
     const result = await duplicateInvoice(id);
-    if (result.success && result.data) {
-      router.push(`/invoices/${result.data.id}`);
+    if (!result.success) {
+      alert(result.errors?.[0] || "Duplizieren fehlgeschlagen.");
+      return;
+    }
+    if (result.data) {
+      router.replace(`/invoices/${result.data.id}`);
+      router.refresh();
     }
   }
 

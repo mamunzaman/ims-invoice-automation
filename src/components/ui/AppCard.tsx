@@ -10,7 +10,7 @@ export function AppCard({ children, className, padding = false }: AppCardProps) 
   return (
     <div
       className={cn(
-        "app-surface rounded-2xl overflow-hidden",
+        "app-surface rounded-[22px] overflow-hidden",
         padding && "p-6",
         className
       )}
@@ -30,7 +30,7 @@ export function AppCardHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-slate-100/80">
+    <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-[var(--ims-border)]">
       <div>
         <h2 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h2>
         {description && (
@@ -62,7 +62,7 @@ export function AppCardFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-slate-100/80 bg-slate-50/40 flex flex-wrap items-center gap-3",
+        "px-6 py-4 border-t border-[var(--ims-border)] bg-[var(--ims-table-toolbar)] flex flex-wrap items-center gap-3",
         className
       )}
     >

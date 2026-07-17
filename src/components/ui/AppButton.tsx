@@ -10,7 +10,7 @@ export type AppButtonSize = "sm" | "md" | "lg";
 
 const VARIANTS: Record<AppButtonVariant, string> = {
   primary:
-    "bg-gradient-to-b from-[#3f8f00] to-[#1f7a00] text-white border border-[#1f7a00]/20 shadow-sm shadow-[#3f8f00]/20 hover:from-[#1f7a00] hover:to-[#186800] hover:shadow-md hover:shadow-[#3f8f00]/25 focus:ring-[#3f8f00]/40",
+    "bg-gradient-to-b from-[#3f8f00] to-[#1f7a00] text-white border border-[#1f7a00]/20 shadow-[var(--ims-shadow-primary-button)] hover:from-[#1f7a00] hover:to-[#186800] hover:-translate-y-px active:translate-y-0 focus:ring-[#3f8f00]/40",
   secondary:
     "bg-white/90 text-[#101828] border border-[#dfe8d8] shadow-sm hover:bg-[#eef8e8] hover:border-[#3f8f00] focus:ring-[#3f8f00]/30",
   danger:

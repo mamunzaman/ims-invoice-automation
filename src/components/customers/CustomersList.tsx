@@ -135,7 +135,7 @@ export function CustomersList({ customers }: CustomersListProps) {
 
   if (customers.length === 0) {
     return (
-      <AppCard className="shadow-sm">
+      <AppCard>
         <AppCardBody>
           <AppEmptyState
             icon={<UsersIcon />}
@@ -163,8 +163,8 @@ export function CustomersList({ customers }: CustomersListProps) {
         <AppStatCard label={t("newThisMonth")} value={stats.newThisMonth} tone="amber" />
       </div>
 
-      <AppCard className="shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100/80 bg-slate-50/40">
+      <AppCard className="overflow-hidden">
+        <div className="px-5 py-4 app-table-toolbar">
           <AppToolbar>
             <AppToolbarGroup className="flex-1 min-w-0">
               <AppSearch
@@ -218,8 +218,8 @@ export function CustomersList({ customers }: CustomersListProps) {
           <>
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100/80 text-left">
+                <thead className="app-table-head">
+                  <tr className="border-b border-[var(--ims-border)] text-left">
                     <th className="px-6 py-3.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
                       {t("columnCustomer")}
                     </th>
@@ -237,12 +237,12 @@ export function CustomersList({ customers }: CustomersListProps) {
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-[var(--ims-border)]">
                   {filtered.map((customer) => (
                     <tr
                       key={customer.id}
                       onClick={() => router.push(`/customers/${customer.id}`)}
-                      className="group cursor-pointer transition-colors hover:bg-blue-50/40"
+                      className="group app-table-row cursor-pointer transition-colors"
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -305,11 +305,11 @@ export function CustomersList({ customers }: CustomersListProps) {
               </table>
             </div>
 
-            <div className="md:hidden divide-y divide-gray-100">
+            <div className="md:hidden divide-y divide-[var(--ims-border)]">
               {filtered.map((customer) => (
                 <div
                   key={customer.id}
-                  className="p-4 hover:bg-slate-50/70 transition-colors"
+                  className="p-4 app-table-row transition-colors"
                 >
                   <Link
                     href={`/customers/${customer.id}`}
@@ -345,7 +345,7 @@ export function CustomersList({ customers }: CustomersListProps) {
                       </div>
                     </div>
                   </Link>
-                  <div className="mt-3 pt-3 border-t border-slate-100/80 flex justify-end">
+                  <div className="mt-3 pt-3 border-t border-[var(--ims-border)] flex justify-end">
                     <CustomerActions id={customer.id} variant="icons" stayOnPage />
                   </div>
                 </div>

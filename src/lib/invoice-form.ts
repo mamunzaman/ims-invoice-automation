@@ -1,7 +1,20 @@
 import type { Customer, Invoice, InvoiceFormData, Profile } from "@/lib/types/database";
+import { INITIAL_INVOICE_GENERATION_STATE } from "@/lib/generation-status";
 import { parseMultilineCustomerAddress, germanAddressFieldsToMultiline } from "@/lib/google-places";
 import { formatCustomerAddress, INVOICE_LABELS, resolveInvoiceCurrency, formatDateDE } from "@/lib/utils";
-import { sanitizeExternalUrl } from "@/lib/urls";
+import {
+  hasStoredDocumentReference,
+  isStoredDropboxPath,
+  normalizeDocumentLink,
+  resolveInvoiceDocumentDownloadHref,
+  sanitizeExternalUrl,
+} from "@/lib/urls";
+import {
+  pickPreferredDropboxDocumentUrl,
+  resolveDropboxPathForDownload,
+  resolveStoredDropboxReference,
+  resolveStoredDropboxSharedUrl,
+} from "@/lib/dropbox-documents";
 import type { GenerationResultStep } from "@/lib/generation-status";
 import { buildDefaultCompletedSteps } from "@/lib/generation-status";
 
@@ -59,6 +72,18 @@ export function formatServicePeriod(start: string, end: string): string {
   return `${formatDateDE(service_period_start)} - ${formatDateDE(service_period_end)}`;
 }
 
+function parseGermanDateSegment(segment: string): string {
+  const match = segment.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!match) return "";
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (!day || !month || !year || month > 12 || day > 31) return "";
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 export function parseServicePeriod(value: string | null | undefined): {
   service_period_start: string;
   service_period_end: string;
@@ -68,20 +93,12 @@ export function parseServicePeriod(value: string | null | undefined): {
     return { service_period_start: "", service_period_end: "" };
   }
 
-  const germanRange = trimmed.match(
-    /^(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2})\.(\d{2})\.(\d{4})$/
-  );
-  if (germanRange) {
-    return {
-      service_period_start: `${germanRange[3]}-${germanRange[2]}-${germanRange[1]}`,
-      service_period_end: `${germanRange[6]}-${germanRange[5]}-${germanRange[4]}`,
-    };
-  }
-
   const parts = trimmed.split(/\s*[-–—]\s*/);
   if (parts.length === 2) {
-    const service_period_start = normalizeIsoDate(parts[0]);
-    const service_period_end = normalizeIsoDate(parts[1]);
+    const service_period_start =
+      parseGermanDateSegment(parts[0]) || normalizeIsoDate(parts[0]);
+    const service_period_end =
+      parseGermanDateSegment(parts[1]) || normalizeIsoDate(parts[1]);
     if (service_period_start && service_period_end) {
       return { service_period_start, service_period_end };
     }
@@ -158,6 +175,10 @@ export interface InvoiceNotesMeta {
   user_notes: string;
   google_doc_url?: string;
   pdf_url?: string;
+  docx_url?: string;
+  docx_file_id?: string;
+  dropbox_pdf_url?: string;
+  dropbox_docx_url?: string;
   generation_steps?: GenerationResultStep[];
   archived?: boolean;
   archived_at?: string;
@@ -227,8 +248,12 @@ export function unpackInvoiceNotes(stored: string | null | undefined): InvoiceNo
       bic: meta.bic?.trim() || "",
       tax_number: meta.tax_number?.trim() || "",
       user_notes: meta.user_notes?.trim() || trailingNotes,
-      google_doc_url: sanitizeExternalUrl(meta.google_doc_url) || undefined,
-      pdf_url: sanitizeExternalUrl(meta.pdf_url) || undefined,
+      google_doc_url: normalizeDocumentLink(meta.google_doc_url) || undefined,
+      pdf_url: normalizeDocumentLink(meta.pdf_url) || undefined,
+      docx_url: normalizeDocumentLink(meta.docx_url) || undefined,
+      docx_file_id: meta.docx_file_id?.trim() || undefined,
+      dropbox_pdf_url: normalizeDocumentLink(meta.dropbox_pdf_url) || undefined,
+      dropbox_docx_url: normalizeDocumentLink(meta.dropbox_docx_url) || undefined,
       archived: meta.archived === true,
       archived_at: meta.archived_at?.trim() || undefined,
       generation_steps: Array.isArray(meta.generation_steps)
@@ -308,6 +333,10 @@ export function packInvoiceNotes(meta: InvoiceNotesMeta): string {
     payload.tax_number ||
     payload.google_doc_url ||
     payload.pdf_url ||
+    payload.docx_url ||
+    payload.docx_file_id ||
+    payload.dropbox_pdf_url ||
+    payload.dropbox_docx_url ||
     payload.generation_steps?.length ||
     payload.archived;
 
@@ -358,24 +387,63 @@ export function mergeInvoiceArchiveState(
   });
 }
 
+export interface InvoiceDocumentMetadata {
+  google_doc_url?: string | null;
+  pdf_url?: string | null;
+  docx_url?: string | null;
+  docx_file_id?: string | null;
+  dropbox_pdf_url?: string | null;
+  dropbox_docx_url?: string | null;
+}
+
 export function mergeInvoiceDocumentUrls(
   notes: string | null | undefined,
-  urls: { google_doc_url?: string | null; pdf_url?: string | null }
+  urls: InvoiceDocumentMetadata
+): string {
+  return mergeInvoiceGenerationMetadata(notes, urls);
+}
+
+export function mergeInvoiceGenerationMetadata(
+  notes: string | null | undefined,
+  metadata: InvoiceDocumentMetadata,
+  steps?: GenerationResultStep[] | null
 ): string {
   const meta = unpackInvoiceNotes(notes);
+
   const googleDocUrl =
-    urls.google_doc_url !== undefined
-      ? sanitizeExternalUrl(urls.google_doc_url)
-      : sanitizeExternalUrl(meta.google_doc_url);
+    metadata.google_doc_url !== undefined
+      ? normalizeDocumentLink(metadata.google_doc_url)
+      : normalizeDocumentLink(meta.google_doc_url);
   const pdfUrl =
-    urls.pdf_url !== undefined
-      ? sanitizeExternalUrl(urls.pdf_url)
-      : sanitizeExternalUrl(meta.pdf_url);
+    metadata.pdf_url !== undefined
+      ? normalizeDocumentLink(metadata.pdf_url)
+      : normalizeDocumentLink(meta.pdf_url);
+  const docxUrl =
+    metadata.docx_url !== undefined
+      ? normalizeDocumentLink(metadata.docx_url)
+      : normalizeDocumentLink(meta.docx_url);
+  const dropboxPdfUrl =
+    metadata.dropbox_pdf_url !== undefined
+      ? normalizeDocumentLink(metadata.dropbox_pdf_url)
+      : normalizeDocumentLink(meta.dropbox_pdf_url);
+  const dropboxDocxUrl =
+    metadata.dropbox_docx_url !== undefined
+      ? normalizeDocumentLink(metadata.dropbox_docx_url)
+      : normalizeDocumentLink(meta.dropbox_docx_url);
+  const docxFileId =
+    metadata.docx_file_id !== undefined
+      ? metadata.docx_file_id?.trim() || undefined
+      : meta.docx_file_id;
 
   return packInvoiceNotes({
     ...meta,
     google_doc_url: googleDocUrl || undefined,
     pdf_url: pdfUrl || undefined,
+    docx_url: docxUrl || undefined,
+    docx_file_id: docxFileId || undefined,
+    dropbox_pdf_url: dropboxPdfUrl || undefined,
+    dropbox_docx_url: dropboxDocxUrl || undefined,
+    generation_steps: steps?.length ? steps : meta.generation_steps,
   });
 }
 
@@ -383,12 +451,7 @@ export function mergeInvoiceGenerationSteps(
   notes: string | null | undefined,
   steps: GenerationResultStep[] | null | undefined
 ): string {
-  const meta = unpackInvoiceNotes(notes);
-
-  return packInvoiceNotes({
-    ...meta,
-    generation_steps: steps?.length ? steps : meta.generation_steps,
-  });
+  return mergeInvoiceGenerationMetadata(notes, {}, steps);
 }
 
 export function calculateInvoiceAmounts(amountNet: string, smallBusinessRule: boolean) {
@@ -474,9 +537,11 @@ export function invoiceServiceDescription(invoice: Invoice): string {
 }
 
 export function invoicePdfUrl(invoice: Invoice): string | null {
-  return (
-    sanitizeExternalUrl(invoice.pdf_url) ??
-    sanitizeExternalUrl(invoiceNotesMeta(invoice).pdf_url)
+  const meta = invoiceNotesMeta(invoice);
+  return resolveStoredDropboxSharedUrl(
+    invoice.dropbox_pdf_url ?? meta.dropbox_pdf_url ?? invoice.pdf_url ?? meta.pdf_url,
+    meta.generation_steps,
+    "pdf"
   );
 }
 
@@ -485,6 +550,109 @@ export function invoiceGoogleDocUrl(invoice: Invoice): string | null {
     sanitizeExternalUrl(invoice.google_doc_url) ??
     sanitizeExternalUrl(invoiceNotesMeta(invoice).google_doc_url)
   );
+}
+
+export function invoiceDocxUrl(invoice: Invoice): string | null {
+  const meta = invoiceNotesMeta(invoice);
+  return resolveStoredDropboxSharedUrl(
+    invoice.dropbox_docx_url ?? meta.dropbox_docx_url ?? meta.docx_url,
+    meta.generation_steps,
+    "docx"
+  );
+}
+
+export interface InvoiceDocumentUrls {
+  googleDocUrl: string | null;
+  pdfDownloadHref: string | null;
+  docxDownloadHref: string | null;
+  pdfGenerated: boolean;
+  docxGenerated: boolean;
+  pdfSavedInDropbox: boolean;
+  docxSavedInDropbox: boolean;
+  dropboxPdfPath: string | null;
+  dropboxDocxPath: string | null;
+}
+
+function preferPathForArchiveDisplay(
+  primary: string | null,
+  fallback: string | null
+): string | null {
+  if (isStoredDropboxPath(primary)) return primary;
+  if (isStoredDropboxPath(fallback)) return fallback;
+  return primary ?? fallback;
+}
+
+export function invoiceDocumentUrls(invoice: Invoice): InvoiceDocumentUrls {
+  const meta = invoiceNotesMeta(invoice);
+  const steps = meta.generation_steps;
+
+  const dropboxPdf =
+    pickPreferredDropboxDocumentUrl(
+      invoice.dropbox_pdf_url,
+      meta.dropbox_pdf_url,
+      resolveStoredDropboxReference(invoice.dropbox_pdf_url ?? meta.dropbox_pdf_url, steps, "pdf")
+    ) ?? null;
+  const pdfFallback =
+    pickPreferredDropboxDocumentUrl(invoice.pdf_url, meta.pdf_url) ?? null;
+
+  const dropboxDocx =
+    pickPreferredDropboxDocumentUrl(
+      invoice.dropbox_docx_url,
+      meta.dropbox_docx_url,
+      resolveStoredDropboxReference(invoice.dropbox_docx_url ?? meta.dropbox_docx_url, steps, "docx")
+    ) ?? null;
+  const docxFallback = pickPreferredDropboxDocumentUrl(meta.docx_url) ?? null;
+
+  // Priority: dropbox_*_url || pdf_url / docx_url (single source per card — no duplicates)
+  const pdfSource = dropboxPdf ?? pdfFallback;
+  let docxSource = dropboxDocx ?? docxFallback;
+
+  // Avoid rendering the same file as both PDF and DOCX
+  if (docxSource && pdfSource && docxSource === pdfSource) {
+    const lower = docxSource.toLowerCase();
+    if (lower.endsWith(".docx") || lower.includes(".docx?")) {
+      // keep on DOCX card only when extension is clearly docx
+    } else if (lower.endsWith(".pdf") || lower.includes(".pdf?")) {
+      docxSource = null;
+    } else {
+      docxSource = dropboxDocx && dropboxDocx !== pdfSource ? dropboxDocx : null;
+    }
+  }
+
+  const pdfGenerated = hasStoredDocumentReference(pdfSource);
+  const docxGenerated = hasStoredDocumentReference(docxSource);
+
+  const pdfPath = resolveDropboxPathForDownload(
+    invoice.dropbox_pdf_url,
+    meta.dropbox_pdf_url,
+    invoice.pdf_url,
+    meta.pdf_url,
+    dropboxPdf,
+    pdfFallback
+  );
+  const docxPath = resolveDropboxPathForDownload(
+    invoice.dropbox_docx_url,
+    meta.dropbox_docx_url,
+    meta.docx_url,
+    dropboxDocx,
+    docxFallback
+  );
+
+  return {
+    googleDocUrl: invoiceGoogleDocUrl(invoice),
+    pdfDownloadHref: pdfPath
+      ? resolveInvoiceDocumentDownloadHref(invoice.id, "pdf", pdfPath, null)
+      : null,
+    docxDownloadHref: docxPath
+      ? resolveInvoiceDocumentDownloadHref(invoice.id, "docx", docxPath, null)
+      : null,
+    pdfGenerated,
+    docxGenerated,
+    pdfSavedInDropbox: hasStoredDocumentReference(dropboxPdf),
+    docxSavedInDropbox: hasStoredDocumentReference(dropboxDocx),
+    dropboxPdfPath: preferPathForArchiveDisplay(pdfPath ?? dropboxPdf, pdfFallback),
+    dropboxDocxPath: preferPathForArchiveDisplay(docxPath ?? dropboxDocx, docxFallback),
+  };
 }
 
 export function invoiceGenerationSteps(invoice: Invoice): GenerationResultStep[] {
@@ -506,11 +674,11 @@ export function invoiceToFormData(
   const meta = invoiceNotesMeta(invoice);
   const address = parseInvoiceCustomerAddress(meta.customer_address);
 
-  const period = parseServicePeriod(invoice.service_period);
+  const period = parseServicePeriod(invoice.service_period ?? "");
 
   return normalizeInvoiceFormData({
     invoice_number: invoice.invoice_number,
-    invoice_date: invoice.invoice_date,
+    invoice_date: invoice.invoice_date ?? "",
     service_period_start: period.service_period_start,
     service_period_end: period.service_period_end,
     invoice_title: meta.invoice_title,
@@ -524,7 +692,7 @@ export function invoiceToFormData(
     service_description: meta.service_description,
     amount_net: String(invoice.net_amount),
     currency: invoice.currency,
-    payment_deadline: invoice.payment_deadline || "",
+    payment_deadline: invoice.payment_deadline ?? "",
     payment_terms: meta.payment_terms || defaults?.payment_terms || "",
     optional_notes: meta.user_notes,
     small_business_rule: invoice.is_small_business,
@@ -534,6 +702,69 @@ export function invoiceToFormData(
     bic: meta.bic,
     tax_number: meta.tax_number,
     invoice_language: meta.invoice_language || defaults?.invoice_language || "en",
+  });
+}
+
+export const INVOICE_WORKFLOW_RESET = {
+  status: "draft" as const,
+  payment_status: "unpaid",
+  workflow_status: "draft",
+  workflow_error: null,
+  ...INITIAL_INVOICE_GENERATION_STATE,
+  google_doc_id: null,
+  google_doc_url: null,
+  pdf_file_id: null,
+  pdf_url: null,
+  dropbox_pdf_url: null,
+  dropbox_docx_url: null,
+  generated_at: null,
+} as const;
+
+/** Clears generated document/workflow columns when duplicating to a fresh draft. Requires migration 006. */
+export const DUPLICATE_INVOICE_DB_RESET = INVOICE_WORKFLOW_RESET;
+
+export function stripInvoiceWorkflowFromNotes(notes: string | null | undefined): string | null {
+  const meta = unpackInvoiceNotes(notes);
+  delete meta.google_doc_url;
+  delete meta.pdf_url;
+  delete meta.docx_url;
+  delete meta.docx_file_id;
+  delete meta.dropbox_pdf_url;
+  delete meta.dropbox_docx_url;
+  delete meta.generation_steps;
+  delete meta.archived;
+  delete meta.archived_at;
+  const packed = packInvoiceNotes(meta);
+  return packed || null;
+}
+
+export function invoiceToDuplicateFormData(
+  invoice: Invoice,
+  defaults?: Partial<InvoiceFormData>
+): InvoiceFormData {
+  return normalizeInvoiceFormData({
+    ...invoiceToFormData(invoice, defaults),
+    invoice_number: "",
+    invoice_date: new Date().toISOString().split("T")[0],
+  });
+}
+
+export function mergeSavedInvoiceIntoFormPayload(
+  form: InvoiceFormData,
+  invoice: Invoice
+): InvoiceFormData {
+  const fromDb = invoiceToFormData(invoice);
+  const normalized = normalizeInvoiceFormData(form);
+
+  return normalizeInvoiceFormData({
+    ...fromDb,
+    ...normalized,
+    amount_net: String(invoice.net_amount),
+    currency: invoice.currency,
+    small_business_rule: invoice.is_small_business,
+    invoice_number: invoice.invoice_number,
+    invoice_date: invoice.invoice_date ?? normalized.invoice_date,
+    payment_deadline: invoice.payment_deadline ?? normalized.payment_deadline,
   });
 }
 

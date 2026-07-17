@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { getCustomers } from "@/lib/actions/customers";
 import { CustomersList } from "@/components/customers/CustomersList";
@@ -17,7 +16,7 @@ export default async function CustomersPage() {
       title={t("title")}
       subtitle={t("subtitle")}
       topActions={
-        <ImsButton component={Link} href="/customers/new" startIcon={<AddIcon />}>
+        <ImsButton href="/customers/new" startIcon={<AddIcon />}>
           {t("newCustomer")}
         </ImsButton>
       }

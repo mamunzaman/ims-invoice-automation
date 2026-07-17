@@ -30,7 +30,7 @@ export function AppStatCard({
   return (
     <div
       className={cn(
-        "app-surface rounded-2xl p-5 transition-shadow hover:shadow-md hover:shadow-slate-900/5",
+        "app-surface rounded-[22px] p-5 transition-[box-shadow,transform] duration-150 hover:-translate-y-px hover:shadow-[var(--ims-shadow-card)]",
         className
       )}
     >

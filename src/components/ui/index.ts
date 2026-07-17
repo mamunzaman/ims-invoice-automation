@@ -28,6 +28,7 @@ export type { AppBadgeTone } from "./AppBadge";
 export { AppStatCard } from "./AppStatCard";
 export { AppEmptyState } from "./AppEmptyState";
 export { AppInfoBox } from "./AppInfoBox";
+export { ClientOnly } from "./ClientOnly";
 
 // Overlays
 export { AppModal } from "./AppModal";
