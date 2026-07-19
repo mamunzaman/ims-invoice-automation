@@ -32,9 +32,37 @@
 
 ---
 
-## 📸 Screenshots
+## 📸 Application Screenshots
 
-Coming soon...
+### Invoice management
+
+![Invoice management list](docs/screenshots/invoice-management-list.jpg)
+
+*Browse, search, and manage invoices in a clean desktop SaaS table with status, amounts, and row actions.*
+
+### Create invoice
+
+![Create invoice form](docs/screenshots/create-invoice-form.jpg)
+
+*Structured invoice form with customer, service period, line items, VAT options, and bank account selection.*
+
+### Live generation progress
+
+![Invoice generation progress](docs/screenshots/invoice-generation-progress.jpg)
+
+*Step-by-step generation timeline while n8n creates Google Docs, PDF/DOCX, Dropbox archives, and the yearly register.*
+
+### Customer directory
+
+![Customer list](docs/screenshots/customer-list.jpg)
+
+*Searchable customer list for bill-to contacts used across invoice creation and administration.*
+
+### Automation health
+
+![Automation health settings](docs/screenshots/automation-health-settings.jpg)
+
+*App settings health checks for Supabase, n8n, Dropbox, and related services with a persisted system log.*
 
 ---
 
