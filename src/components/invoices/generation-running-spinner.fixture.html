@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Generation running spinner fixture</title>
+    <style>
+      @keyframes generation-running-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 3px solid rgba(47, 143, 0, 0.18);
+        border-top-color: #3f8f00;
+        box-sizing: border-box;
+      }
+
+      .spinner-animated {
+        animation: generation-running-spin 800ms linear infinite;
+      }
+
+      .spinner-static {
+        animation: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .spinner-respect-motion {
+          animation: none !important;
+        }
+      }
+
+      .spinner-respect-motion {
+        animation: generation-running-spin 800ms linear infinite;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      data-testid="generation-marker-running"
+      class="spinner spinner-animated"
+      role="img"
+      aria-label="In progress"
+    ></div>
+    <div
+      data-testid="generation-marker-running-motion"
+      class="spinner spinner-respect-motion"
+      role="img"
+      aria-label="In progress reduced-motion aware"
+    ></div>
+  </body>
+</html>

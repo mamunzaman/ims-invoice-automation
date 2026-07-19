@@ -13,6 +13,7 @@ export { default as AccountBalanceOutlinedIcon } from "@mui/icons-material/Accou
 export { default as CalendarMonthOutlinedIcon } from "@mui/icons-material/CalendarMonthOutlined";
 export { default as CheckCircleIcon } from "@mui/icons-material/CheckCircle";
 export { default as CheckCircleOutlinedIcon } from "@mui/icons-material/CheckCircleOutlined";
+export { default as CheckIcon } from "@mui/icons-material/Check";
 export { default as ContentCopyIcon } from "@mui/icons-material/ContentCopy";
 export { default as DashboardOutlinedIcon } from "@mui/icons-material/DashboardOutlined";
 export { default as DeleteOutlinedIcon } from "@mui/icons-material/DeleteOutlined";
@@ -40,5 +41,6 @@ export { default as RadioButtonUncheckedOutlinedIcon } from "@mui/icons-material
 export { default as ReceiptLongOutlinedIcon } from "@mui/icons-material/ReceiptLongOutlined";
 export { default as SaveOutlinedIcon } from "@mui/icons-material/SaveOutlined";
 export { default as SettingsOutlinedIcon } from "@mui/icons-material/SettingsOutlined";
+export { default as TableChartOutlinedIcon } from "@mui/icons-material/TableChartOutlined";
 export { default as VisibilityOutlinedIcon } from "@mui/icons-material/VisibilityOutlined";
 export { default as PeopleOutlineOutlinedIcon } from "@mui/icons-material/PeopleOutlineOutlined";

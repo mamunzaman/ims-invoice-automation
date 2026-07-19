@@ -20,11 +20,18 @@ export const designTokens = {
     input: "#ffffff",
     /** Fully opaque panels for Select/Menu/Popover — never use translucent card glass here. */
     menu: "#FFFFFF",
+    /** Fully opaque Dialog / Modal paper — never inherit translucent card glass. */
+    overlay: "#FFFFFF",
+    overlayMuted: "#F8FAF7",
+  },
+  overlay: {
+    backdrop: "rgba(15, 23, 42, 0.62)",
   },
   border: {
     default: "rgba(90,120,80,0.14)",
     subtle: "rgba(90,120,80,0.10)",
     focus: "rgba(63,143,0,0.35)",
+    overlay: "rgba(15, 23, 42, 0.10)",
   },
   shadow: {
     soft: "0 8px 30px rgba(25,40,15,0.05)",

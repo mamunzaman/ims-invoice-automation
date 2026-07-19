@@ -37,6 +37,10 @@
 - [x] Invoices list table: horizontal scroll at narrow widths; all columns kept; no viewport overflow
 - [x] Invoice table row overlay actions (hover/focus/touch; no Actions column / three-dot menu)
 - [x] Opaque SaaS dropdown menus (theme + ImsSelect; no translucent glass bleed)
+- [x] Generation progress step `register_saved` (after Dropbox DOCX, before invoice_saved)
+- [x] Generation progress modal session lifecycle (no auto-close; idle/running/finalizing/succeeded/failed)
+- [x] Generation progress modal visual polish (opaque overlay, invoice context, clearer step states)
+- [x] Invoice detail: read-only yearly register panel + `register_saved` in Creation steps
 
 ## In Progress
 
@@ -44,6 +48,11 @@
 
 ## Pending Tasks
 
+- [ ] Manual test: invoice detail register panel (recorded / not recorded / failed; no XLS download)
+- [ ] Manual test: Creation steps includes register_saved before status saved
+- [ ] Manual test: progress modal opacity + invoice context + step contrast
+- [ ] Manual test: progress modal never auto-closes; View result / explicit close only
+- [ ] Manual test: generation progress shows register_saved with EN/DE labels
 - [ ] Manual test: opaque dropdowns (Profile, Settings, Customers, Invoices, invoice form)
 - [ ] Manual test: invoice row overlay (desktop hover, keyboard, touch, confirm dialogs)
 - [ ] Manual test: invoices list responsiveness (1440 / 1024 / 768 / 390)
@@ -57,4 +66,4 @@
 
 ## Last Update
 
-2026-07-17 — Dropdown menus: solid opaque panels via theme tokens + shared ImsSelect MenuProps
+2026-07-18 — Invoice detail: yearly register info panel + Creation steps `register_saved` (no XLS download)

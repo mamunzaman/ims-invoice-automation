@@ -32,6 +32,7 @@ const STEP_LABEL_KEYS: Record<
   | "dropboxFolders"
   | "dropboxPdf"
   | "dropboxDocx"
+  | "registerSaved"
   | "invoiceSaved"
 > = {
   received: "received",
@@ -44,6 +45,7 @@ const STEP_LABEL_KEYS: Record<
   dropbox_folders: "dropboxFolders",
   dropbox_pdf: "dropboxPdf",
   dropbox_docx: "dropboxDocx",
+  register_saved: "registerSaved",
   invoice_saved: "invoiceSaved",
 };
 

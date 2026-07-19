@@ -31,6 +31,7 @@ const DETAIL_STEP_LABEL_KEYS: Record<string, string> = {
   save_docx: "timeline.saveDocx",
   copy_pdf_all: "timeline.copyPdfAll",
   copy_docx_all: "timeline.copyDocxAll",
+  register_saved: "timeline.registerSaved",
   completed: "timeline.statusSaved",
 };
 
@@ -112,6 +113,9 @@ export function InvoiceDetailTimeline({ invoice, documents }: InvoiceDetailTimel
 
     let timestamp: string | null = null;
     if (isCompleted && step.key === "received") timestamp = createdTs;
+    if (isCompleted && step.key === "register_saved") {
+      timestamp = formatStepTimestamp(step.completed_at, locale);
+    }
     if (isCompleted && step.key === "completed") timestamp = finalTimestamp;
 
     return {
