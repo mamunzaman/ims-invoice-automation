@@ -128,6 +128,27 @@ export const imsTheme = createTheme({
         },
       },
     },
+    MuiDialog: {
+      styleOverrides: {
+        paper: {
+          backgroundColor: `${designTokens.surface.overlay} !important`,
+          backgroundImage: "none",
+          backdropFilter: "none",
+          WebkitBackdropFilter: "none",
+          opacity: 1,
+        },
+      },
+    },
+    MuiBackdrop: {
+      styleOverrides: {
+        root: {
+          backgroundColor: designTokens.overlay.backdrop,
+        },
+        invisible: {
+          backgroundColor: "transparent",
+        },
+      },
+    },
     MuiPopover: {
       styleOverrides: {
         paper: {

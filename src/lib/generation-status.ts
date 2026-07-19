@@ -70,6 +70,7 @@ export const DEFAULT_GENERATION_STEP_KEYS = [
   "dropbox_folders",
   "dropbox_pdf",
   "dropbox_docx",
+  "register_saved",
   "invoice_saved",
 ] as const;
 
@@ -84,6 +85,7 @@ export const DEFAULT_COMPLETED_GENERATION_STEPS: GenerationResultStep[] = [
   { key: "dropbox_folders", label: "Dropbox archive folders prepared", status: "completed" },
   { key: "dropbox_pdf", label: "PDF archived in Dropbox", status: "completed" },
   { key: "dropbox_docx", label: "DOCX archived in Dropbox", status: "completed" },
+  { key: "register_saved", label: "Yearly invoice register saved", status: "completed" },
   { key: "invoice_saved", label: "Invoice status saved", status: "completed" },
 ];
 

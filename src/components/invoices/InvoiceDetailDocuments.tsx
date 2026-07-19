@@ -1,6 +1,6 @@
 "use client";
 
-import { Grid, Stack, Typography } from "@mui/material";
+import { Box, Grid, Stack, Typography } from "@mui/material";
 import { useLocale, useTranslations } from "next-intl";
 import {
   CloudOutlinedIcon,
@@ -9,11 +9,18 @@ import {
   FolderOutlinedIcon,
   OpenInNewIcon,
   PictureAsPdfOutlinedIcon,
+  TableChartOutlinedIcon,
 } from "@/components/icons/muiIcons";
-import { ImsCard, ImsDocumentCard } from "@/components/forms/ims";
+import { ImsCard, ImsDocumentCard, ImsStatusChip } from "@/components/forms/ims";
+import type { InvoiceRegisterDisplayStatus } from "@/lib/invoice-generation-steps";
+import {
+  yearlyRegisterExcelBackupPath,
+  yearlyRegisterSheetName,
+} from "@/lib/invoice-generation-steps";
 import { extractDropboxArchiveFolder, isLocalhostAbsoluteUrl, sanitizeExternalUrl } from "@/lib/urls";
 import { formatDate } from "@/lib/utils";
 import { type AppLocale } from "@/i18n/routing";
+import { designTokens } from "@/theme/designTokens";
 import { imsColors } from "@/theme/imsTheme";
 
 interface InvoiceDetailDocumentsProps {
@@ -29,6 +36,9 @@ interface InvoiceDetailDocumentsProps {
   dropboxDocxPath?: string | null;
   invoiceYear?: number;
   workflowComplete?: boolean;
+  invoiceNumber?: string;
+  registerStatus?: InvoiceRegisterDisplayStatus;
+  registerErrorMessage?: string | null;
 }
 
 function buildDocumentSubtitle(
@@ -47,6 +57,139 @@ function buildDocumentSubtitle(
   return parts.length ? parts.join(" · ") : translate("noDate");
 }
 
+function RegisterInfoPanel({
+  invoiceNumber,
+  year,
+  status,
+  errorMessage,
+}: {
+  invoiceNumber: string;
+  year: number;
+  status: InvoiceRegisterDisplayStatus;
+  errorMessage?: string | null;
+}) {
+  const t = useTranslations("documents");
+  const sheetName = yearlyRegisterSheetName(year);
+  const backupPath = yearlyRegisterExcelBackupPath(year);
+
+  const isRecorded = status === "recorded";
+  const isFailed = status === "failed";
+
+  const badgeLabel = isRecorded
+    ? t("registerRecorded")
+    : isFailed
+      ? t("registerFailedBadge")
+      : t("registerNotRecorded");
+
+  const badgeTone = isRecorded ? "green" : isFailed ? "red" : "gray";
+
+  const description = isRecorded
+    ? t("registerRecordedDescription", { invoiceNumber, year })
+    : isFailed
+      ? t("registerFailedDescription")
+      : t("registerPendingDescription", { year });
+
+  const iconColor = isRecorded
+    ? imsColors.primaryDark
+    : isFailed
+      ? "#b42318"
+      : imsColors.textMuted;
+
+  const surfaceBg = isRecorded
+    ? designTokens.color.primaryLight
+    : isFailed
+      ? "#fef2f2"
+      : designTokens.surface.cardSoft;
+
+  const surfaceBorder = isRecorded
+    ? "rgba(63,143,0,0.22)"
+    : isFailed
+      ? "#fecaca"
+      : designTokens.border.default;
+
+  return (
+    <Box
+      sx={{
+        mt: 2,
+        px: 2,
+        py: 1.75,
+        borderRadius: "12px",
+        border: `1px solid ${surfaceBorder}`,
+        bgcolor: surfaceBg,
+      }}
+    >
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={{ xs: 1.5, sm: 2 }}
+        sx={{ alignItems: { xs: "stretch", sm: "flex-start" } }}
+      >
+        <Box
+          sx={{
+            width: 36,
+            height: 36,
+            flexShrink: 0,
+            borderRadius: "10px",
+            bgcolor: designTokens.surface.input,
+            border: `1px solid ${designTokens.border.default}`,
+            display: "grid",
+            placeItems: "center",
+            color: iconColor,
+          }}
+        >
+          <TableChartOutlinedIcon sx={{ fontSize: 20 }} />
+        </Box>
+
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 0.75 }}
+          >
+            <Typography sx={{ fontWeight: 700, fontSize: 14, color: imsColors.textDark }}>
+              {t("registerTitle")}
+            </Typography>
+            <ImsStatusChip tone={badgeTone} label={badgeLabel} />
+          </Stack>
+
+          <Typography sx={{ mt: 0.75, fontSize: 13, color: imsColors.textDark, lineHeight: 1.45 }}>
+            {description}
+          </Typography>
+
+          {isFailed && errorMessage ? (
+            <Typography sx={{ mt: 0.5, fontSize: 12, color: "#b42318", lineHeight: 1.4 }}>
+              {errorMessage}
+            </Typography>
+          ) : null}
+
+          <Typography sx={{ mt: 0.75, fontSize: 13, color: imsColors.textMuted, lineHeight: 1.4 }}>
+            {t("registerSheetLabel")}: {sheetName}
+          </Typography>
+
+          {isRecorded ? (
+            <>
+              <Typography sx={{ mt: 0.35, fontSize: 12, color: imsColors.textMuted, lineHeight: 1.4 }}>
+                {t("registerBackupNote")}
+              </Typography>
+              <Typography
+                sx={{
+                  mt: 0.25,
+                  fontSize: 11,
+                  color: imsColors.textMuted,
+                  lineHeight: 1.4,
+                  wordBreak: "break-all",
+                  opacity: 0.85,
+                }}
+              >
+                {backupPath}
+              </Typography>
+            </>
+          ) : null}
+        </Box>
+      </Stack>
+    </Box>
+  );
+}
+
 export function InvoiceDetailDocuments({
   googleDocUrl,
   pdfDownloadHref,
@@ -60,6 +203,9 @@ export function InvoiceDetailDocuments({
   dropboxDocxPath,
   invoiceYear,
   workflowComplete = false,
+  invoiceNumber,
+  registerStatus = "pending",
+  registerErrorMessage,
 }: InvoiceDetailDocumentsProps) {
   const t = useTranslations("documents");
   const locale = useLocale() as AppLocale;
@@ -75,6 +221,7 @@ export function InvoiceDetailDocuments({
     : t("noDate");
   const archiveFolder = extractDropboxArchiveFolder(dropboxPdfPath, dropboxDocxPath, invoiceYear);
   const hasDropboxArchive = Boolean(dropboxPdfPath || dropboxDocxPath || workflowComplete);
+  const year = invoiceYear ?? new Date().getFullYear();
 
   return (
     <ImsCard title={t("title")}>
@@ -121,6 +268,15 @@ export function InvoiceDetailDocuments({
           />
         </Grid>
       </Grid>
+
+      {invoiceNumber ? (
+        <RegisterInfoPanel
+          invoiceNumber={invoiceNumber}
+          year={year}
+          status={registerStatus}
+          errorMessage={registerErrorMessage}
+        />
+      ) : null}
 
       <Stack
         direction={{ xs: "column", sm: "row" }}

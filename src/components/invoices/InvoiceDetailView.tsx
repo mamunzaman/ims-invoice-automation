@@ -29,6 +29,7 @@ import {
   getInvoiceDisplayStatus,
   getPaymentStatusChip,
 } from "@/lib/invoice-display";
+import { resolveInvoiceRegisterDisplay } from "@/lib/invoice-generation-steps";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { Invoice } from "@/lib/types/database";
 import { type AppLocale } from "@/i18n/routing";
@@ -79,6 +80,7 @@ export function InvoiceDetailView({ invoice }: InvoiceDetailViewProps) {
   const invoiceYear = invoice.invoice_date
     ? new Date(invoice.invoice_date).getFullYear()
     : new Date().getFullYear();
+  const registerDisplay = resolveInvoiceRegisterDisplay(meta.generation_steps);
   const mainAmount = invoice.is_small_business ? invoice.net_amount : invoice.gross_amount;
   const hasBankInfo = Boolean(meta.bank_name || meta.iban || meta.bic || meta.account_holder);
 
@@ -272,6 +274,11 @@ export function InvoiceDetailView({ invoice }: InvoiceDetailViewProps) {
                 dropboxPdfPath={dropboxPdfPath}
                 dropboxDocxPath={dropboxDocxPath}
                 invoiceYear={invoiceYear}
+                invoiceNumber={invoice.invoice_number}
+                registerStatus={registerDisplay.status}
+                registerErrorMessage={
+                  registerDisplay.status === "failed" ? invoice.generation_error : null
+                }
                 workflowComplete={
                   invoice.workflow_status === "completed" ||
                   invoice.generation_status === "COMPLETED"

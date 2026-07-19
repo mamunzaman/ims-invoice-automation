@@ -1,18 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box,
-  CircularProgress,
   Dialog,
   LinearProgress,
   Stack,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
 import {
-  CheckCircleOutlinedIcon,
+  CheckIcon,
   ErrorOutlineOutlinedIcon,
-  RadioButtonUncheckedOutlinedIcon,
 } from "@/components/icons/muiIcons";
 import { ImsButton } from "@/components/forms/ims";
 import type { InvoiceGenerationStatusPayload } from "@/app/api/invoices/[id]/generation-status/route";
@@ -21,10 +20,16 @@ import {
   resolveActiveGenerationStep,
   type GenerationStatus,
 } from "@/lib/generation-status";
+import { mergeGenerateResults } from "@/lib/invoice-generation-client";
 import {
-  isGenerationStatusComplete,
-  mergeGenerateResults,
-} from "@/lib/invoice-generation-client";
+  deriveGenerationSessionPhase,
+  isGenerationFailureStatus,
+  isProcessingGenerationSession,
+  isTerminalGenerationSuccess,
+  preserveGenerationSnapshot,
+  shouldIgnoreStaleGenerationSession,
+  type GenerationSessionPhase,
+} from "@/lib/generation-session";
 import {
   createCanonicalPendingSteps,
   INVOICE_GENERATION_STEPS,
@@ -33,6 +38,17 @@ import {
   pickHigherStatus,
   type GenerationStep,
 } from "@/lib/invoice-generation-steps";
+import {
+  generationModalBackdropSx,
+  generationModalPaperSx,
+  generationModalSurface,
+  generationTimelineGeometry,
+  generationTimelineGridTemplate,
+  getGenerationStepVisualState,
+  getRunningSpinnerSx,
+  resolveGenerationInvoiceContext,
+  shouldRenderTimelineConnector,
+} from "@/components/invoices/generation-progress-presentation";
 import { sanitizeExternalUrl, toRelativeInvoiceSecureDownloadHref } from "@/lib/urls";
 import { imsColors } from "@/theme/imsTheme";
 import { useTranslations } from "next-intl";
@@ -52,6 +68,7 @@ const CANONICAL_STEP_LABEL_KEYS: Record<string, string> = {
   dropbox_folders: "dropboxFolders",
   dropbox_pdf: "dropboxPdf",
   dropbox_docx: "dropboxDocx",
+  register_saved: "registerSaved",
   invoice_saved: "invoiceSaved",
 };
 
@@ -65,13 +82,16 @@ const COARSE_STATUS_TO_STEP_KEY: Partial<Record<GenerationStatus, string>> = {
   COMPLETED: "invoice_saved",
 };
 
-export type GenerationProgressPhase = "running" | "success" | "failed";
-
 interface InvoiceGenerationProgressModalProps {
   open: boolean;
+  sessionKey: string;
+  sessionPhase: GenerationSessionPhase;
   invoiceId: string | null;
+  invoiceNumber?: string | null;
+  customerName?: string | null;
   initialStatus?: GenerationStatus | null;
   externalCompletion?: InvoiceGenerationStatusPayload | null;
+  onSessionPhaseChange: (phase: GenerationSessionPhase) => void;
   onCompleted: (result: InvoiceGenerationStatusPayload) => void;
   onFailed: (error: string) => void;
   onClose: () => void;
@@ -115,61 +135,20 @@ function mergePayloadIntoSteps(
   return merged;
 }
 
-function isExternalCompletionReady(payload: InvoiceGenerationStatusPayload): boolean {
-  return (
-    payload.generation_status === "COMPLETED" ||
-    payload.workflow_status === "completed" ||
-    isGenerationStatusComplete(payload)
-  );
-}
-
-function completeGeneration(
-  data: InvoiceGenerationStatusPayload,
-  completedRef: MutableRefObject<boolean>,
-  setSnapshot: (value: InvoiceGenerationStatusPayload) => void,
-  setCanonicalSteps: (value: GenerationStep[]) => void,
-  setPhase: (value: GenerationProgressPhase) => void,
-  onCompleted: (result: InvoiceGenerationStatusPayload) => void,
-  autoNavigateTimer: MutableRefObject<ReturnType<typeof setTimeout> | null>,
-  snapshotRef?: MutableRefObject<InvoiceGenerationStatusPayload | null>
-) {
-  if (completedRef.current) return;
-  completedRef.current = true;
-
-  const finalized =
-    mergeGenerateResults(null, data, { preferSecondForCompletion: true }) ?? data;
-  const finalizedSteps = normalizeGenerationResultSteps(finalized.steps);
-
-  setSnapshot(finalized);
-  if (snapshotRef) snapshotRef.current = finalized;
-  setCanonicalSteps(
-    mergeGenerationSteps(createCanonicalPendingSteps(), finalizedSteps)
-  );
-  setPhase("success");
-
-  if (process.env.NODE_ENV === "development") {
-    console.debug("[generation-modal] completed", {
-      generation_status: finalized.generation_status,
-      workflow_status: finalized.workflow_status,
-      pdf_url: finalized.pdf_url,
-      docx_url: finalized.docx_url,
-    });
-  }
-
-  autoNavigateTimer.current = setTimeout(() => {
-    onCompleted(finalized);
-  }, 1000);
-}
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function InvoiceGenerationProgressModal({
   open,
+  sessionKey,
+  sessionPhase,
   invoiceId,
+  invoiceNumber,
+  customerName,
   initialStatus,
   externalCompletion,
+  onSessionPhaseChange,
   onCompleted,
   onFailed,
   onClose,
@@ -178,7 +157,11 @@ export function InvoiceGenerationProgressModal({
   const t = useTranslations("generationProgress");
   const tTimeline = useTranslations("timeline");
   const tInvoiceErrors = useTranslations("invoiceErrors");
-  const [phase, setPhase] = useState<GenerationProgressPhase>("running");
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", {
+    defaultMatches: false,
+    noSsr: true,
+  });
+  const invoiceContext = resolveGenerationInvoiceContext(invoiceNumber, customerName);
   const [snapshot, setSnapshot] = useState<InvoiceGenerationStatusPayload | null>(null);
   const [canonicalSteps, setCanonicalSteps] = useState<GenerationStep[]>(() =>
     applyCoarseStatusToSteps(
@@ -188,112 +171,175 @@ export function InvoiceGenerationProgressModal({
   );
   const [errorTitle, setErrorTitle] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const completedRef = useRef(false);
   const snapshotRef = useRef<InvoiceGenerationStatusPayload | null>(null);
-  const autoNavigateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionKeyRef = useRef(sessionKey);
+  const sessionPhaseRef = useRef(sessionPhase);
+  const terminalHandledRef = useRef(false);
+  const onSessionPhaseChangeRef = useRef(onSessionPhaseChange);
   const onCompletedRef = useRef(onCompleted);
   const onFailedRef = useRef(onFailed);
 
   useEffect(() => {
+    sessionKeyRef.current = sessionKey;
+    sessionPhaseRef.current = sessionPhase;
+    onSessionPhaseChangeRef.current = onSessionPhaseChange;
     onCompletedRef.current = onCompleted;
     onFailedRef.current = onFailed;
   });
 
   useEffect(() => {
-    if (!open || !externalCompletion || completedRef.current) return;
-    if (!isExternalCompletionReady(externalCompletion)) return;
+    terminalHandledRef.current = false;
+    snapshotRef.current = null;
+    setSnapshot(null);
+    setErrorTitle(null);
+    setErrorMessage(null);
+    setCanonicalSteps(
+      applyCoarseStatusToSteps(
+        createCanonicalPendingSteps(),
+        initialStatus && isGenerationStatus(initialStatus) ? initialStatus : "VALIDATING"
+      )
+    );
+  }, [sessionKey, initialStatus]);
 
-    if (process.env.NODE_ENV === "development") {
-      console.debug("[generation-modal] external completion received", {
-        generation_status: externalCompletion.generation_status,
-        workflow_status: externalCompletion.workflow_status,
-        pdf_url: externalCompletion.pdf_url,
-        docx_url: externalCompletion.docx_url,
-      });
+  function applyPayload(
+    data: InvoiceGenerationStatusPayload,
+    options?: { preferComplete?: boolean; expectedSessionKey?: string }
+  ) {
+    const expected = options?.expectedSessionKey ?? sessionKeyRef.current;
+    if (shouldIgnoreStaleGenerationSession(sessionKeyRef.current, expected)) {
+      return;
     }
 
-    completeGeneration(
-      externalCompletion,
-      completedRef,
-      setSnapshot,
-      setCanonicalSteps,
-      setPhase,
-      (data) => onCompletedRef.current(data),
-      autoNavigateTimer,
-      snapshotRef
-    );
-  }, [open, externalCompletion]);
+    const mergedSnapshot =
+      mergeGenerateResults(snapshotRef.current, data, {
+        preferSecondForCompletion: options?.preferComplete ?? false,
+      }) ?? data;
+
+    const status = isGenerationStatus(mergedSnapshot.generation_status)
+      ? mergedSnapshot.generation_status
+      : "PENDING";
+    const step = resolveActiveGenerationStep(status, mergedSnapshot.generation_step);
+    const baseSteps = snapshotRef.current
+      ? mergeGenerationSteps(
+          createCanonicalPendingSteps(),
+          normalizeGenerationResultSteps(snapshotRef.current.steps)
+        )
+      : createCanonicalPendingSteps();
+    const mergedSteps = mergePayloadIntoSteps(baseSteps, mergedSnapshot, step);
+
+    const nextSnapshot: InvoiceGenerationStatusPayload = {
+      ...mergedSnapshot,
+      steps: mergedSteps.map((s) => ({
+        key: s.key,
+        label: s.label,
+        status: s.status,
+        url: s.url ?? undefined,
+        completed_at: s.completed_at ?? undefined,
+      })),
+    };
+
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    setCanonicalSteps(mergedSteps);
+
+    if (isGenerationFailureStatus(mergedSnapshot)) {
+      if (terminalHandledRef.current && sessionPhaseRef.current === "failed") return;
+      terminalHandledRef.current = true;
+      const technical = mergedSnapshot.generation_error?.trim() || "UNKNOWN_GENERATION_ERROR";
+      const friendly = getFriendlyGenerationErrorContent(technical, tInvoiceErrors);
+      setErrorTitle(friendly.title);
+      setErrorMessage(friendly.message);
+      onSessionPhaseChangeRef.current("failed");
+      onFailedRef.current(technical);
+      return;
+    }
+
+    const nextPhase = deriveGenerationSessionPhase({
+      previous: sessionPhaseRef.current === "idle" ? "running" : sessionPhaseRef.current,
+      payload: nextSnapshot,
+    });
+
+    if (nextPhase !== sessionPhaseRef.current) {
+      onSessionPhaseChangeRef.current(nextPhase);
+    }
+
+    if (nextPhase === "succeeded") {
+      terminalHandledRef.current = true;
+      if (process.env.NODE_ENV === "development") {
+        console.debug("[generation-modal] terminal success (modal stays open)", {
+          generation_status: nextSnapshot.generation_status,
+          workflow_status: nextSnapshot.workflow_status,
+        });
+      }
+    }
+  }
 
   useEffect(() => {
-    if (!open || !invoiceId || phase !== "running") return;
+    if (!open || !externalCompletion) return;
+    if (sessionPhase === "succeeded" || sessionPhase === "failed") return;
+
+    applyPayload(externalCompletion, { preferComplete: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apply on external snapshot only
+  }, [open, externalCompletion, sessionPhase, sessionKey]);
+
+  useEffect(() => {
+    if (!open || !invoiceId) return;
+    if (!isProcessingGenerationSession(sessionPhase)) return;
 
     let cancelled = false;
     const startedAt = Date.now();
-    const autoNavigateTimerRef = autoNavigateTimer;
+    const pollSessionKey = sessionKey;
 
     async function poll() {
-      while (!cancelled && !completedRef.current) {
+      while (!cancelled && sessionKeyRef.current === pollSessionKey) {
+        const phaseNow = sessionPhaseRef.current;
+        if (!isProcessingGenerationSession(phaseNow)) {
+          return;
+        }
+
         if (Date.now() - startedAt > TIMEOUT_MS) {
+          if (shouldIgnoreStaleGenerationSession(sessionKeyRef.current, pollSessionKey)) {
+            return;
+          }
           const technical = `Generation timed out after ${TIMEOUT_MS / 1000} seconds`;
           const friendly = getFriendlyGenerationErrorContent(technical, tInvoiceErrors, {
             forceCategory: "DOCUMENT_TIMEOUT",
           });
-          setPhase("failed");
           setErrorTitle(friendly.title);
           setErrorMessage(friendly.message);
+          onSessionPhaseChangeRef.current("failed");
           onFailedRef.current(technical);
           return;
         }
 
         try {
           const response = await fetch(`/api/invoices/${invoiceId}/generation-status`);
+          if (shouldIgnoreStaleGenerationSession(sessionKeyRef.current, pollSessionKey)) {
+            return;
+          }
+
           if (!response.ok) {
+            // Preserve last valid snapshot; keep modal open and retry.
+            setSnapshot((current) => preserveGenerationSnapshot(current, current));
             await sleep(POLL_INTERVAL_MS);
             continue;
           }
 
           const data = (await response.json()) as InvoiceGenerationStatusPayload;
-          if (completedRef.current) return;
-
-          const mergedSnapshot =
-            mergeGenerateResults(snapshotRef.current, data) ?? data;
-          const status = isGenerationStatus(mergedSnapshot.generation_status)
-            ? mergedSnapshot.generation_status
-            : "PENDING";
-          const step = resolveActiveGenerationStep(status, mergedSnapshot.generation_step);
-
-          snapshotRef.current = mergedSnapshot;
-          setSnapshot(mergedSnapshot);
-          setCanonicalSteps((current) =>
-            mergePayloadIntoSteps(current, mergedSnapshot, step)
-          );
-
-          if (isGenerationStatusComplete(mergedSnapshot)) {
-            completeGeneration(
-              { ...mergedSnapshot, generation_status: "COMPLETED", generation_step: "COMPLETED" },
-              completedRef,
-              setSnapshot,
-              setCanonicalSteps,
-              setPhase,
-              (result) => onCompletedRef.current(result),
-              autoNavigateTimer,
-              snapshotRef
-            );
+          if (shouldIgnoreStaleGenerationSession(sessionKeyRef.current, pollSessionKey)) {
             return;
           }
 
-          if (status === "FAILED") {
-            completedRef.current = true;
-            const technical = mergedSnapshot.generation_error?.trim() || "UNKNOWN_GENERATION_ERROR";
-            const friendly = getFriendlyGenerationErrorContent(technical, tInvoiceErrors);
-            setPhase("failed");
-            setErrorTitle(friendly.title);
-            setErrorMessage(friendly.message);
-            onFailedRef.current(technical);
+          applyPayload(data, { expectedSessionKey: pollSessionKey });
+
+          if (
+            isTerminalGenerationSuccess(snapshotRef.current ?? data) ||
+            isGenerationFailureStatus(data)
+          ) {
             return;
           }
         } catch {
-          /* retry on next interval */
+          // Transient network error — keep last snapshot and continue polling.
         }
 
         await sleep(POLL_INTERVAL_MS);
@@ -304,18 +350,13 @@ export function InvoiceGenerationProgressModal({
 
     return () => {
       cancelled = true;
-      const timer = autoNavigateTimerRef.current;
-      if (timer) {
-        clearTimeout(timer);
-        autoNavigateTimerRef.current = null;
-      }
     };
-  }, [open, invoiceId, phase, tInvoiceErrors]);
+  }, [open, invoiceId, sessionPhase, sessionKey, tInvoiceErrors]);
 
   const completedCount = canonicalSteps.filter((step) => step.status === "completed").length;
   const runningStep = canonicalSteps.find((step) => step.status === "running");
   const progressPercent =
-    phase === "success"
+    sessionPhase === "succeeded"
       ? 100
       : Math.round((completedCount / INVOICE_GENERATION_STEPS.length) * 100);
 
@@ -327,13 +368,26 @@ export function InvoiceGenerationProgressModal({
     ? toRelativeInvoiceSecureDownloadHref(invoiceId, "docx")
     : null;
 
-  function handleClose() {
-    if (phase === "running") return;
-    if (phase === "success" && snapshot) {
-      onCompletedRef.current(snapshot);
-      return;
+  const processing = isProcessingGenerationSession(sessionPhase);
+  const uiPhase =
+    sessionPhase === "succeeded"
+      ? "success"
+      : sessionPhase === "failed"
+        ? "failed"
+        : "running";
+
+  function handleDialogClose(_event: unknown, reason?: string) {
+    // Never close from Escape/backdrop; only explicit footer actions.
+    if (reason === "backdropClick" || reason === "escapeKeyDown") return;
+    if (processing || sessionPhase === "succeeded") return;
+    if (sessionPhase === "failed") {
+      onClose();
     }
-    onClose();
+  }
+
+  function handleViewResult() {
+    if (!snapshot) return;
+    onCompletedRef.current(snapshot);
   }
 
   function resolveStepLabel(step: GenerationStep) {
@@ -346,58 +400,150 @@ export function InvoiceGenerationProgressModal({
   return (
     <Dialog
       open={open}
-      onClose={handleClose}
-      maxWidth="sm"
+      onClose={handleDialogClose}
+      maxWidth={false}
       fullWidth
       slotProps={{
+        backdrop: {
+          sx: generationModalBackdropSx,
+        },
         paper: {
-          sx: {
-            borderRadius: "24px",
-            overflow: "hidden",
-            border: `1px solid ${imsColors.border}`,
-            boxShadow: "0 24px 48px rgba(16, 24, 40, 0.12)",
-            maxHeight: { xs: "92vh", sm: "90vh" },
-            display: "flex",
-            flexDirection: "column",
-          },
+          sx: generationModalPaperSx,
         },
       }}
     >
       <Box
         sx={{
           flexShrink: 0,
-          background: `linear-gradient(180deg, ${imsColors.primaryLight} 0%, #fff 55%)`,
-          px: { xs: 2.5, sm: 3 },
-          pt: 3,
-          pb: 2.5,
+          bgcolor: generationModalSurface.header,
+          px: { xs: 2.5, sm: 3.5 },
+          pt: { xs: 2.5, sm: 3.25 },
+          pb: { xs: 2.25, sm: 2.75 },
+          borderBottom: `1px solid ${generationModalSurface.border}`,
         }}
       >
-        <Typography sx={{ fontWeight: 700, fontSize: 20, color: imsColors.textDark, mb: 0.5 }}>
-          {phase === "success"
+        <Typography
+          component="h2"
+          sx={{ fontWeight: 700, fontSize: { xs: 19, sm: 20 }, color: imsColors.textDark, mb: 1.5 }}
+        >
+          {uiPhase === "success"
             ? t("successTitle")
-            : phase === "failed"
+            : uiPhase === "failed"
               ? errorTitle || t("failedTitle")
               : t("title")}
         </Typography>
+
+        {(uiPhase === "running" || uiPhase === "success") && (
+          <Box
+            data-testid="generation-context-panel"
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", sm: "35% 65%" },
+              gap: { xs: 1.5, sm: 2 },
+              bgcolor: generationModalSurface.contextPanel,
+              border: `1px solid ${generationModalSurface.contextBorder}`,
+              borderRadius: "12px",
+              px: { xs: 1.75, sm: 2 },
+              py: { xs: 1.75, sm: 2 },
+              mb: 1.5,
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography
+                sx={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: imsColors.textMuted,
+                  mb: 0.5,
+                }}
+              >
+                {t("contextLabelInvoice")}
+              </Typography>
+              <Typography
+                data-testid="generation-context-invoice"
+                sx={{
+                  fontSize: { xs: 15, sm: 16 },
+                  fontWeight: 700,
+                  color: imsColors.textDark,
+                  lineHeight: 1.3,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {invoiceContext.invoiceNumber ?? t("contextInvoiceFallback")}
+              </Typography>
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography
+                sx={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: imsColors.textMuted,
+                  mb: 0.5,
+                }}
+              >
+                {t("contextLabelCustomer")}
+              </Typography>
+              <Typography
+                data-testid="generation-context-customer"
+                sx={{
+                  fontSize: { xs: 15, sm: 16 },
+                  fontWeight: 600,
+                  color: imsColors.textDark,
+                  lineHeight: 1.35,
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+              >
+                {invoiceContext.customerName ?? t("contextCustomerFallback")}
+              </Typography>
+            </Box>
+          </Box>
+        )}
+
         <Typography sx={{ fontSize: 14, color: imsColors.textMuted, lineHeight: 1.5 }}>
-          {phase === "success"
+          {uiPhase === "success"
             ? t("successSubtitle")
-            : phase === "failed"
+            : uiPhase === "failed"
               ? errorMessage || tInvoiceErrors("unknownGenerationError.message")
               : t("subtitle")}
         </Typography>
 
-        {phase === "running" ? (
-          <Box sx={{ mt: 2 }}>
-            <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.75 }}>
-              <Typography sx={{ fontSize: 12, color: imsColors.textMuted }}>
+        {uiPhase === "running" ? (
+          <Box sx={{ mt: 1.5 }}>
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{ justifyContent: "space-between", alignItems: "center", mb: 1 }}
+            >
+              <Typography
+                sx={{
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: imsColors.textDark,
+                  lineHeight: 1.35,
+                  minWidth: 0,
+                  pr: 1,
+                }}
+              >
                 {t("currentStep", {
-                  step: runningStep
-                    ? resolveStepLabel(runningStep)
-                    : tTimeline("pending"),
+                  step: runningStep ? resolveStepLabel(runningStep) : tTimeline("pending"),
                 })}
               </Typography>
-              <Typography sx={{ fontSize: 12, fontWeight: 600, color: imsColors.primaryDark }}>
+              <Typography
+                sx={{
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: imsColors.primaryDark,
+                  flexShrink: 0,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
                 {t("progress", { percent: progressPercent })}
               </Typography>
             </Stack>
@@ -405,12 +551,13 @@ export function InvoiceGenerationProgressModal({
               variant="determinate"
               value={progressPercent}
               sx={{
-                height: 6,
+                height: 8,
                 borderRadius: 99,
-                bgcolor: "rgba(45, 106, 30, 0.12)",
+                bgcolor: generationModalSurface.track,
                 "& .MuiLinearProgress-bar": {
                   borderRadius: 99,
                   bgcolor: imsColors.primary,
+                  transition: prefersReducedMotion ? "none" : "transform 0.35s ease",
                 },
               }}
             />
@@ -423,109 +570,206 @@ export function InvoiceGenerationProgressModal({
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
-          px: { xs: 2.5, sm: 3 },
-          py: 2.5,
+          px: { xs: 2.5, sm: 3.25 },
+          py: { xs: 2, sm: 2.75 },
+          bgcolor: generationModalSurface.body,
           WebkitOverflowScrolling: "touch",
         }}
       >
-        <Stack spacing={0} sx={{ position: "relative" }}>
-          <Box
-            sx={{
-              position: "absolute",
-              left: 15,
-              top: 14,
-              bottom: 14,
-              width: 2,
-              bgcolor: imsColors.primaryLight,
-            }}
-          />
-          {canonicalSteps.map((step) => {
-            const state =
-              step.status === "failed"
-                ? "failed"
-                : step.status === "completed"
-                  ? "completed"
-                  : step.status === "running"
-                    ? "active"
-                    : "upcoming";
+        <Box>
+          {canonicalSteps.map((step, index) => {
+            const state = getGenerationStepVisualState(step.status);
+            const isLast = index === canonicalSteps.length - 1;
+            const showConnector = shouldRenderTimelineConnector(isLast);
+            const ariaLabel =
+              state === "completed"
+                ? t("stepCompletedAria")
+                : state === "running"
+                  ? t("stepRunningAria")
+                  : state === "failed"
+                    ? t("stepFailedAria")
+                    : t("stepPendingAria");
+            const halfMarker = generationTimelineGeometry.markerSize / 2;
 
             return (
-              <Stack
+              <Box
                 key={step.key}
-                direction="row"
-                spacing={1.5}
+                data-testid={`generation-step-${state}`}
+                data-step-state={state}
                 sx={{
-                  alignItems: "flex-start",
-                  py: 1,
-                  opacity: state === "upcoming" ? 0.45 : 1,
+                  position: "relative",
+                  display: "grid",
+                  gridTemplateColumns: generationTimelineGridTemplate,
+                  columnGap: `${generationTimelineGeometry.columnGap}px`,
+                  alignItems: "center",
+                  minHeight: generationTimelineGeometry.rowMinHeight,
+                  boxSizing: "border-box",
                 }}
               >
+                {showConnector ? (
+                  <Box
+                    aria-hidden
+                    data-testid="generation-step-connector"
+                    sx={{
+                      position: "absolute",
+                      left: generationTimelineGeometry.markerColumnWidth / 2,
+                      transform: "translateX(-50%)",
+                      top: `calc(50% + ${halfMarker}px)`,
+                      bottom: `calc(-50% + ${halfMarker}px)`,
+                      width: generationTimelineGeometry.connectorWidth,
+                      bgcolor:
+                        state === "completed"
+                          ? generationModalSurface.completed
+                          : generationModalSurface.connectorPending,
+                      zIndex: 0,
+                    }}
+                  />
+                ) : null}
+
                 <Box
+                  data-testid="generation-marker-column"
                   sx={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: "50%",
-                    display: "grid",
-                    placeItems: "center",
-                    flexShrink: 0,
-                    bgcolor:
-                      state === "completed"
-                        ? imsColors.primaryLight
-                        : state === "active"
-                          ? "#fff"
-                          : "#f9fafb",
-                    border: `1px solid ${
-                      state === "active" ? imsColors.primary : imsColors.border
-                    }`,
+                    width: generationTimelineGeometry.markerColumnWidth,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    position: "relative",
                     zIndex: 1,
+                    alignSelf: "center",
                   }}
                 >
-                  {state === "completed" ? (
-                    <CheckCircleOutlinedIcon sx={{ fontSize: 18, color: imsColors.primary }} />
-                  ) : state === "active" ? (
-                    <CircularProgress size={16} sx={{ color: imsColors.primary }} />
-                  ) : state === "failed" ? (
-                    <ErrorOutlineOutlinedIcon sx={{ fontSize: 18, color: "#d92d20" }} />
-                  ) : (
-                    <RadioButtonUncheckedOutlinedIcon
-                      sx={{ fontSize: 16, color: imsColors.textMuted }}
+                  {state === "running" ? (
+                    <Box
+                      role="img"
+                      aria-label={ariaLabel}
+                      data-testid="generation-marker-running"
+                      data-spinner="css-keyframes"
+                      sx={getRunningSpinnerSx(prefersReducedMotion)}
                     />
+                  ) : (
+                    <Box
+                      role="img"
+                      aria-label={ariaLabel}
+                      data-testid={`generation-marker-${state}`}
+                      sx={{
+                        width: generationTimelineGeometry.markerSize,
+                        height: generationTimelineGeometry.markerSize,
+                        borderRadius: "50%",
+                        display: "grid",
+                        placeItems: "center",
+                        position: "relative",
+                        flexShrink: 0,
+                        bgcolor:
+                          state === "completed"
+                            ? generationModalSurface.completed
+                            : state === "failed"
+                              ? generationModalSurface.failed
+                              : generationModalSurface.paper,
+                        border:
+                          state === "completed"
+                            ? `1px solid ${generationModalSurface.completedBorder}`
+                            : state === "failed"
+                              ? `1px solid ${generationModalSurface.failed}`
+                              : `2px solid ${generationModalSurface.pending}`,
+                        boxShadow:
+                          state === "completed" ? "0 1px 3px rgba(31, 122, 0, 0.28)" : "none",
+                      }}
+                    >
+                      {state === "completed" ? (
+                        <CheckIcon
+                          sx={{
+                            fontSize: generationTimelineGeometry.checkIconSize,
+                            color: "#FFFFFF",
+                            display: "block",
+                          }}
+                        />
+                      ) : state === "failed" ? (
+                        <ErrorOutlineOutlinedIcon sx={{ fontSize: 18, color: "#FFFFFF" }} />
+                      ) : (
+                        <Box
+                          aria-hidden
+                          sx={{
+                            width: generationTimelineGeometry.pendingDotSize,
+                            height: generationTimelineGeometry.pendingDotSize,
+                            borderRadius: "50%",
+                            bgcolor: generationModalSurface.pending,
+                          }}
+                        />
+                      )}
+                    </Box>
                   )}
                 </Box>
-                <Box sx={{ pt: 0.5, minWidth: 0 }}>
-                  <Typography
-                    sx={{
-                      fontSize: 14,
-                      fontWeight: state === "active" ? 600 : 500,
-                      color:
-                        state === "failed"
-                          ? "#d92d20"
-                          : state === "active"
-                            ? imsColors.textDark
-                            : imsColors.textMuted,
-                    }}
-                  >
-                    {resolveStepLabel(step)}
-                  </Typography>
+
+                <Box
+                  sx={{
+                    minWidth: 0,
+                    py: 0.5,
+                    display: "flex",
+                    alignItems: "stretch",
+                    gap: 1,
+                  }}
+                >
+                  {state === "running" ? (
+                    <Box
+                      aria-hidden
+                      sx={{
+                        width: 3,
+                        flexShrink: 0,
+                        alignSelf: "stretch",
+                        borderRadius: 99,
+                        bgcolor: generationModalSurface.runningAccent,
+                        my: 0.25,
+                      }}
+                    />
+                  ) : null}
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography
+                      sx={{
+                        fontSize: 14,
+                        fontWeight: state === "running" ? 700 : state === "completed" ? 600 : 500,
+                        color:
+                          state === "failed"
+                            ? generationModalSurface.failed
+                            : state === "pending"
+                              ? generationModalSurface.pendingLabel
+                              : imsColors.textDark,
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {resolveStepLabel(step)}
+                    </Typography>
+                    {state === "running" ? (
+                      <Typography
+                        sx={{
+                          mt: 0.25,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: imsColors.primaryDark,
+                        }}
+                      >
+                        {t("inProgress")}
+                      </Typography>
+                    ) : null}
+                  </Box>
                 </Box>
-              </Stack>
+              </Box>
             );
           })}
-        </Stack>
+        </Box>
       </Box>
 
-      {phase === "success" || phase === "failed" ? (
+      {uiPhase === "success" || uiPhase === "failed" ? (
         <Box
           sx={{
             flexShrink: 0,
-            px: { xs: 2.5, sm: 3 },
+            px: { xs: 2.5, sm: 3.5 },
             py: 2,
-            borderTop: `1px solid ${imsColors.border}`,
-            bgcolor: "#fff",
+            borderTop: `1px solid ${generationModalSurface.border}`,
+            bgcolor: generationModalSurface.footer,
           }}
         >
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ flexWrap: "wrap" }}>
-            {phase === "success" ? (
+            {uiPhase === "success" ? (
               <>
                 {googleUrl ? (
                   <ImsButton
@@ -557,13 +801,11 @@ export function InvoiceGenerationProgressModal({
                     {t("downloadDocx")}
                   </ImsButton>
                 ) : null}
-                <ImsButton onClick={() => snapshot && onCompletedRef.current(snapshot)}>
-                  {t("viewResult")}
-                </ImsButton>
+                <ImsButton onClick={handleViewResult}>{t("viewResult")}</ImsButton>
               </>
             ) : null}
 
-            {phase === "failed" ? (
+            {uiPhase === "failed" ? (
               <>
                 {onRetry ? (
                   <ImsButton onClick={onRetry}>{t("retryDocumentGeneration")}</ImsButton>
@@ -589,3 +831,5 @@ export function InvoiceGenerationProgressModal({
     </Dialog>
   );
 }
+
+export type { GenerationSessionPhase };

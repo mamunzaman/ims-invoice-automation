@@ -2,11 +2,11 @@
 
 ## Current Goal
 
-Manual verify opaque dropdown menus on Profile, Settings, Customers, Invoices filters, invoice form, templates, and bank accounts.
+Manual verify invoice detail yearly register panel + Creation steps `register_saved`.
 
 ## Verify
 
-1. Open each Select/Menu — solid white panel, no form text bleed-through
-2. Hover/selected/focus-visible option states readable; keyboard Tab/Arrow/Enter
-3. Desktop + mobile: menus above cards/sticky sections, not clipped
-4. Confirm form values/handlers unchanged
+1. Open a generated invoice with completed `register_saved` — green panel, “Recorded” / “Erfasst”, no XLS download
+2. Invoice without `register_saved` — neutral “Not recorded”; backup path hidden
+3. Creation steps lists “Yearly invoice register saved” immediately before “Invoice status saved”
+4. `register_saved` status matches persisted metadata only (not overall generated)

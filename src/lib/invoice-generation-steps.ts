@@ -14,6 +14,7 @@ export const INVOICE_GENERATION_STEPS = [
   { key: "dropbox_folders", label: "Dropbox archive folders prepared" },
   { key: "dropbox_pdf", label: "PDF archived in Dropbox" },
   { key: "dropbox_docx", label: "DOCX archived in Dropbox" },
+  { key: "register_saved", label: "Yearly invoice register saved" },
   { key: "invoice_saved", label: "Invoice status saved" },
 ] as const;
 
@@ -32,6 +33,7 @@ export const INVOICE_DETAIL_GENERATION_STEPS = [
   { key: "save_docx", label: "DOCX archived in Dropbox" },
   { key: "copy_pdf_all", label: "PDF copied to Alle_Rechnungen" },
   { key: "copy_docx_all", label: "DOCX copied to Alle_Rechnungen" },
+  { key: "register_saved", label: "Yearly invoice register saved" },
   { key: "completed", label: "Invoice status saved" },
 ] as const;
 
@@ -61,12 +63,14 @@ export function normalizeDetailStepKey(key: string): string {
   const normalized = key.trim().toLowerCase();
   if (normalized === "save_pdf" || normalized === "copy_pdf_all") return normalized;
   if (normalized === "save_docx" || normalized === "copy_docx_all") return normalized;
+  if (normalized === "register_saved") return "register_saved";
   if (normalized === "completed") return "completed";
 
   const canonical = normalizeStepKey(normalized);
   if (canonical === "dropbox_pdf") return "save_pdf";
   if (canonical === "dropbox_docx") return "save_docx";
   if (canonical === "invoice_saved") return "completed";
+  if (canonical === "register_saved") return "register_saved";
   return canonical;
 }
 
@@ -253,6 +257,8 @@ export function finalizeDetailStepsForCompletedInvoice(steps: GenerationStep[]):
   return steps.map((step) => {
     if (step.status === "failed") return step;
     if (isCompletedGenerationStepStatus(step.status)) return step;
+    // Never invent register_saved completion from overall workflow success.
+    if (step.key === "register_saved") return step;
     return { ...step, status: "completed" as const };
   });
 }
@@ -269,6 +275,45 @@ export function resolveDetailStepsFromStored(
   }
 
   return merged;
+}
+
+export type InvoiceRegisterDisplayStatus = "recorded" | "pending" | "failed";
+
+export type InvoiceRegisterDisplay = {
+  status: InvoiceRegisterDisplayStatus;
+  completedAt?: string | null;
+};
+
+/** Resolve yearly register UI state from persisted `register_saved` only. */
+export function resolveInvoiceRegisterDisplay(
+  storedSteps: GenerationResultStep[] | null | undefined
+): InvoiceRegisterDisplay {
+  if (!storedSteps?.length) return { status: "pending" };
+
+  const match = storedSteps.find((step) => {
+    const detailKey = normalizeDetailStepKey(step.key);
+    const canonicalKey = normalizeStepKey(step.key);
+    return detailKey === "register_saved" || canonicalKey === "register_saved";
+  });
+
+  if (!match) return { status: "pending" };
+
+  const status = normalizeStepStatus(match.status);
+  if (status === "failed") {
+    return { status: "failed", completedAt: match.completed_at ?? null };
+  }
+  if (status === "completed") {
+    return { status: "recorded", completedAt: match.completed_at ?? null };
+  }
+  return { status: "pending", completedAt: match.completed_at ?? null };
+}
+
+export function yearlyRegisterSheetName(year: number): string {
+  return `IMS Invoice_Register_${year}`;
+}
+
+export function yearlyRegisterExcelBackupPath(year: number): string {
+  return `/ItConsultingMamun/Rechnungen/Register/${year}/IMS_Invoice_Register_${year}.xlsx`;
 }
 
 export interface GenerationUrlContext {

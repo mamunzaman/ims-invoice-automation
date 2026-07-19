@@ -65,6 +65,11 @@ import {
   normalizeGenerateApiResult,
   type InvoiceGenerateApiResponse,
 } from "@/lib/invoice-generation-client";
+import {
+  isGenerationSessionVisible,
+  isTerminalGenerationSuccess,
+  type GenerationSessionPhase,
+} from "@/lib/generation-session";
 import { imsColors, imsInputHeight } from "@/theme/imsTheme";
 import type {
   InvoiceFormData,
@@ -379,11 +384,15 @@ export function InvoiceForm({
   const initialGenerationActive = isInitialGenerationActive(initialData);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [progressOpen, setProgressOpen] = useState(initialGenerationActive);
+  const [generationSessionPhase, setGenerationSessionPhase] = useState<GenerationSessionPhase>(
+    initialGenerationActive ? "running" : "idle"
+  );
+  const progressOpen = isGenerationSessionVisible(generationSessionPhase);
   const [progressInvoiceId, setProgressInvoiceId] = useState<string | null>(() =>
     initialGenerationActive && initialData?.id ? initialData.id : null
   );
   const [progressAttempt, setProgressAttempt] = useState(0);
+  const progressSessionKey = `${progressInvoiceId ?? "new"}-${progressAttempt}`;
   const [progressInitialStatus, setProgressInitialStatus] = useState<GenerationStatus>(() =>
     initialGenerationActive ? resolveProgressInitialStatus(initialData) : "VALIDATING"
   );
@@ -690,12 +699,12 @@ export function InvoiceForm({
   const applySuccessFromSnapshot = useCallback(
     (data: InvoiceGenerationStatusPayload) => {
       clearGenerateRequestGuard();
-      setProgressOpen(false);
+      setGenerationSessionPhase("idle");
       setGenerating(false);
       setGenerateCompletionSnapshot(null);
       setGenerationTechnicalError("");
 
-      // Navigate to refreshed invoice detail (generated state)
+      // Navigate only after explicit user action (View result).
       router.push(`/invoices/${data.id}`);
       router.refresh();
     },
@@ -750,7 +759,20 @@ export function InvoiceForm({
         return;
       }
 
-      if (isGenerationStatusComplete(status)) {
+      if (isTerminalGenerationSuccess(status) || isGenerationStatusComplete(status)) {
+        // While the progress modal session is visible, feed the modal — never auto-close/navigate.
+        if (isGenerationSessionVisible(generationSessionPhase)) {
+          const snapshot =
+            mergeGenerateResults(null, status, { preferSecondForCompletion: true }) ?? status;
+          setGenerateCompletionSnapshot({
+            ...snapshot,
+            generation_status: snapshot.generation_status ?? "COMPLETED",
+            generation_step: snapshot.generation_step ?? "COMPLETED",
+          });
+          setBackgroundStatusReconciliation(false);
+          return;
+        }
+
         setBackgroundStatusReconciliation(false);
         const snapshot =
           mergeGenerateResults(null, status, { preferSecondForCompletion: true }) ?? status;
@@ -789,6 +811,7 @@ export function InvoiceForm({
     backgroundStatusReconciliation,
     progressInvoiceId,
     generateRequestInFlight,
+    generationSessionPhase,
     applySuccessFromSnapshot,
     handleGenerationFailed,
   ]);
@@ -809,7 +832,7 @@ export function InvoiceForm({
       setProgressInitialStatus(resolveProgressInitialStatus(status ?? initialData));
       setProgressAttempt((attempt) => attempt + 1);
       setProgressInvoiceId(invoiceId);
-      setProgressOpen(true);
+      setGenerationSessionPhase("running");
       generateRequestInFlightRef.current = invoiceId;
       setGenerateRequestInFlight(true);
     },
@@ -879,16 +902,22 @@ export function InvoiceForm({
         if (data.error_code === "N8N_WEBHOOK_UNAVAILABLE") {
           setGenerationTechnicalError(data.generation_error || data.error || "UNKNOWN_GENERATION_ERROR");
           setGenerating(false);
+          setGenerationSessionPhase((phase) =>
+            isGenerationSessionVisible(phase) ? "failed" : phase
+          );
           clearGenerateRequestGuard();
           return;
         }
 
         if (data.errors?.length) {
           applyValidationErrors(data.errors);
-          setProgressOpen(false);
+          setGenerationSessionPhase("idle");
         } else {
           setGenerationTechnicalError(
             data.generation_error || data.workflow_error || data.error || "UNKNOWN_GENERATION_ERROR"
+          );
+          setGenerationSessionPhase((phase) =>
+            isGenerationSessionVisible(phase) ? "failed" : phase
           );
         }
         setGenerating(false);
@@ -940,7 +969,7 @@ export function InvoiceForm({
     if (existingId) {
       setProgressAttempt((attempt) => attempt + 1);
       setProgressInvoiceId(existingId);
-      setProgressOpen(true);
+      setGenerationSessionPhase("running");
     }
 
     const saveResult = await persistInvoice(payload);
@@ -950,7 +979,7 @@ export function InvoiceForm({
       } else {
         setErrors([tValidation("saveFailed")]);
       }
-      setProgressOpen(false);
+      setGenerationSessionPhase("idle");
       setGenerating(false);
       return;
     }
@@ -970,7 +999,7 @@ export function InvoiceForm({
       (saveResult.data && "id" in saveResult.data ? saveResult.data.id : undefined);
     if (!id) {
       setErrors([t("invoiceSaveFailed")]);
-      setProgressOpen(false);
+      setGenerationSessionPhase("idle");
       setGenerating(false);
       return;
     }
@@ -984,7 +1013,7 @@ export function InvoiceForm({
     if (!existingId) {
       setProgressAttempt((attempt) => attempt + 1);
       setProgressInvoiceId(id);
-      setProgressOpen(true);
+      setGenerationSessionPhase("running");
     }
 
     setGenerating(false);
@@ -993,21 +1022,28 @@ export function InvoiceForm({
 
   const progressModal = (
     <InvoiceGenerationProgressModal
-      key={`${progressInvoiceId ?? "new"}-${progressAttempt}`}
+      key={progressSessionKey}
       open={progressOpen}
+      sessionKey={progressSessionKey}
+      sessionPhase={generationSessionPhase}
       invoiceId={progressInvoiceId}
+      invoiceNumber={form.invoice_number}
+      customerName={form.customer_name}
       initialStatus={progressInitialStatus}
       externalCompletion={generateCompletionSnapshot}
+      onSessionPhaseChange={setGenerationSessionPhase}
       onCompleted={applySuccessFromSnapshot}
       onFailed={handleGenerationFailed}
       onClose={() => {
-        setProgressOpen(false);
+        setGenerationSessionPhase("idle");
         setGenerating(false);
+        clearGenerateRequestGuard();
       }}
       onRetry={() => {
         if (!progressInvoiceId || !generatePayloadRef.current) return;
         setGenerateCompletionSnapshot(null);
         setGenerationTechnicalError("");
+        setGenerationSessionPhase("running");
         setProgressAttempt((attempt) => attempt + 1);
         const retryPayload = normalizeInvoiceFormData(form);
         generatePayloadRef.current = retryPayload;
