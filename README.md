@@ -64,6 +64,14 @@
 
 *App settings health checks for Supabase, n8n, Dropbox, and related services with a persisted system log.*
 
+## n8n Automation Workflow
+
+The workflow validates invoice data, generates PDF and DOCX documents from a Google Docs template, creates the required Dropbox folders, uploads the files, synchronizes the yearly invoice register, and reports the generation status back to the application.
+
+[![Complete IMS n8n automation workflow](docs/screenshots/n8n-workflow-overview.png)](docs/screenshots/n8n-workflow-overview.png)
+
+> Click the image to view the complete workflow in full resolution.
+
 ---
 
 ## 🚀 Local Development
