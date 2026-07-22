@@ -1,21 +1,22 @@
 # IMS Invoice Automation
 
-> Professional multilingual invoice management SaaS built with Next.js, Supabase, n8n, Google Docs, Google Drive, and Material UI.
+> Professional multilingual invoice management SaaS built with Next.js, Supabase, n8n, Google Docs, Dropbox, and Material UI.
 
 ## ✨ Features
 
-- 📄 Professional invoice management
-- 🌍 English & German interface
-- 👥 Customer management
-- ☁️ Google Docs invoice generation
-- 📑 Automatic PDF generation
-- 📁 Google Drive integration
-- ⚡ n8n workflow automation
+- 📄 Professional invoice management (EN/DE)
+- 👥 Customer directory
+- 📝 Google Docs template-based document generation
+- 📑 Automatic PDF and DOCX export
+- 📦 Dropbox as final document storage and archive
+- 📋 Yearly invoice register synchronization
+- ⚡ n8n workflow automation with live progress timeline
+- 🔄 Supabase-backed real-time generation status
+- 🔐 Secure PDF/DOCX downloads (server-side Dropbox access)
+- 🩺 Automation health checks and system log
 - 💳 Multiple bank accounts
 - 🏢 German invoice support (§19 UStG)
-- 📊 Invoice administration dashboard
 - 🎨 Modern Material UI design system
-- 📱 Responsive desktop/mobile interface
 
 ---
 
@@ -24,11 +25,10 @@
 - Next.js (App Router)
 - TypeScript
 - Material UI
-- Supabase
-- PostgreSQL
+- Supabase / PostgreSQL
 - n8n
-- Google Docs API
-- Google Drive API
+- Google Docs API (template & generation)
+- Dropbox API (final PDF/DOCX storage & downloads)
 
 ---
 
@@ -50,7 +50,7 @@
 
 ![Invoice generation progress](docs/screenshots/invoice-generation-progress.jpg)
 
-*Step-by-step generation timeline while n8n creates Google Docs, PDF/DOCX, Dropbox archives, and the yearly register.*
+*Step-by-step generation timeline while n8n creates Google Docs, exports PDF/DOCX, archives to Dropbox, and updates the yearly register.*
 
 ### Customer directory
 
@@ -66,9 +66,9 @@
 
 ## n8n Automation Workflow
 
-The workflow validates invoice data, generates PDF and DOCX documents from a Google Docs template, creates the required Dropbox folders, uploads the files, synchronizes the yearly invoice register, and reports the generation status back to the application.
+The workflow validates invoice data, generates PDF and DOCX from a Google Docs template, prepares Dropbox folders, uploads the archive files, synchronizes the yearly invoice register, and reports generation status back to the app (Supabase).
 
-[![Complete IMS n8n automation workflow](docs/screenshots/n8n-workflow-overview.png)](docs/screenshots/n8n-workflow-overview.png)
+[![Complete IMS n8n automation workflow](docs/screenshots/n8n-workflow-overview.png.png)](docs/screenshots/n8n-workflow-overview.png.png)
 
 > Click the image to view the complete workflow in full resolution.
 
@@ -92,9 +92,12 @@ npm run dev
 
 Create a `.env.local` file using `.env.example`.
 
-Server-only (never `NEXT_PUBLIC_*`):
+Notable variables:
 
-- `DROPBOX_ACCESS_TOKEN` — required for secure PDF/DOCX downloads via `/api/invoices/[id]/download/pdf|docx`
+- `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase client
+- `N8N_INVOICE_WEBHOOK_URL` / `N8N_INVOICE_SECRET` — invoice generation webhook
+- `N8N_HEALTH_WEBHOOK_URL` — automation health check
+- `DROPBOX_ACCESS_TOKEN` — server-only token for secure PDF/DOCX downloads via `/api/invoices/[id]/download/pdf|docx` (never `NEXT_PUBLIC_*`)
   - Local: set in `.env.local`, then restart `npm run dev`
   - Production: set in your hosting dashboard, then redeploy
 
@@ -108,13 +111,15 @@ Current Version
 
 Current Features
 
-- Invoice Management
-- Customer Management
-- Google Docs Automation
-- PDF Generation
-- Google Drive Integration
-- Multilingual UI
-- Invoice Administration
+- Invoice & customer management
+- Google Docs template generation
+- PDF & DOCX export
+- Dropbox archive & secure downloads
+- Yearly invoice register sync
+- Live generation progress timeline
+- Supabase real-time generation status
+- Automation health settings
+- Multilingual UI (EN/DE)
 
 Planned
 
@@ -123,7 +128,6 @@ Planned
 - Payment Tracking
 - Analytics Dashboard
 - Company Branding
-- Live Invoice Generation Timeline
 
 ---
 
