@@ -68,7 +68,7 @@
 
 The workflow validates invoice data, generates PDF and DOCX from a Google Docs template, prepares Dropbox folders, uploads the archive files, synchronizes the yearly invoice register, and reports generation status back to the app (Supabase).
 
-[![Complete IMS n8n automation workflow](docs/screenshots/n8n-workflow-overview.png.png)](docs/screenshots/n8n-workflow-overview.png.png)
+[![Complete IMS n8n automation workflow](docs/screenshots/n8n-workflow-overview.png)](docs/screenshots/n8n-workflow-overview.png)
 
 > Click the image to view the complete workflow in full resolution.
 
